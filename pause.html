@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!--
+      PAUSED-TAB CHECKPOINT
+      background.js sends an extra tab here instead of deleting it. The URL
+      contains only an opaque queue id; the real destination remains in local
+      extension storage.
+    -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Behavyour — Your tab is safe</title>
+    <link rel="stylesheet" href="pause.css">
+  </head>
+
+  <body class="pause-page">
+    <main class="pause-card">
+      <header class="pause-brand">
+        <span class="pause-mark" aria-hidden="true">B</span>
+        <span>Behavyour</span>
+      </header>
+
+      <!-- Shown only while pause.js asks for the initial hands-off action. -->
+      <section id="resetStep" class="pause-step">
+        <div class="pause-eyebrow">BREAK THE AUTOMATIC LOOP</div>
+        <h1>Take your hand off the mouse</h1>
+        <p>
+          Keep the pointer still for five seconds. Meaningful movement restarts
+          the timer; tiny sensor jitter is ignored.
+        </p>
+        <output id="stillnessCountdown" class="large-countdown">5</output>
+      </section>
+
+      <!-- Main decision appears after the hands-off reset succeeds. -->
+      <section id="decisionStep" class="pause-step hidden">
+        <div class="pause-eyebrow">YOUR EXTRA TAB IS SAFE</div>
+        <h1>Stay with what you chose—or open this deliberately.</h1>
+        <p id="destinationSummary" class="destination-summary"></p>
+
+        <div id="lockStatus" class="lock-status" aria-live="polite">
+          <span>Available for intentional review in</span>
+          <strong id="lockCountdown">—</strong>
+        </div>
+
+        <div class="decision-actions">
+          <button id="returnButton" class="primary-action" type="button">
+            Return to my task
+          </button>
+          <button id="saveButton" class="secondary-action" type="button">
+            Keep this destination for later
+          </button>
+        </div>
+        <p class="guidance">
+          A destination kept for later stays only on this device and expires
+          after seven days.
+        </p>
+
+        <!-- Revealed when the original cooldown ends. -->
+        <div id="intentSection" class="intent-section hidden">
+          <h2>If this tab is needed now, name its job.</h2>
+          <label for="tabIntent">I am opening this tab to…</label>
+          <textarea
+            id="tabIntent"
+            rows="3"
+            maxlength="240"
+            placeholder="For example: find the source needed for paragraph three"
+          ></textarea>
+          <p id="intentGuidance" class="guidance">
+            Write at least 12 characters. Your answer stays on this device.
+          </p>
+          <button id="commitIntentButton" type="button" disabled>
+            Commit to this reason
+          </button>
+
+          <!-- Filled after the reason is submitted and its timer has elapsed. -->
+          <div id="reflectionStep" class="reflection-step hidden">
+            <p id="reflectionMessage"></p>
+            <button id="openButton" type="button" disabled>
+              Open this one tab
+            </button>
+          </div>
+        </div>
+
+        <p id="errorMessage" class="error-message" role="alert"></p>
+      </section>
+    </main>
+
+    <!-- Keep last: pause.js expects all the ids above to already exist. -->
+    <script src="pause.js"></script>
+  </body>
+</html>

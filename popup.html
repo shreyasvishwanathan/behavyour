@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!--
+      POPUP DOCUMENT SETUP
+      Chrome opens this small page when the toolbar icon is clicked.
+      ui.css contains the main design; history.css contains the optional
+      history-feature styles.
+    -->
+    <meta charset="utf-8">
+    <title>Behavyour</title>
+    <link rel="stylesheet" href="ui.css">
+    <link rel="stylesheet" href="history.css">
+  </head>
+
+  <body class="popup">
+    <!--
+      Brand and master on/off switch.
+
+      While a tab pause is active, popup.js disables this switch. This keeps a
+      quick, automatic click from undoing a pause that the user chose earlier.
+      The ellipsis is only a loading placeholder.
+    -->
+    <header>
+      <span class="mark" aria-hidden="true">B</span>
+      <div>
+        <h1>Behavyour</h1>
+        <small>Attention guard</small>
+      </div>
+      <button
+        id="toggle"
+        class="switch"
+        type="button"
+        aria-label="Turn Behavyour on or off"
+        aria-pressed="false"
+        aria-describedby="toggleMessage"
+        disabled
+      >
+        …
+      </button>
+    </header>
+
+    <main>
+      <!--
+        If background.js refuses a request to turn protection off, popup.js
+        puts a plain-English explanation here. `role="status"` also announces
+        the message to people using a screen reader.
+      -->
+      <p
+        id="toggleMessage"
+        class="popup-notice hidden"
+        role="status"
+        aria-live="polite"
+      ></p>
+
+      <!-- Current tab-cooldown status. popup.js updates the timer each second. -->
+      <section class="hero">
+        <div class="eyebrow">TAB PAUSE</div>
+        <div id="timer" class="timer" aria-live="polite">Ready</div>
+        <p id="status">New tabs are available.</p>
+      </section>
+
+      <!--
+        PAUSED-TAB QUEUE
+        This block explains the queue card below.
+        A blocked destination is saved locally instead of being destroyed.
+        popup.js shows how many are waiting and lets the user deliberately
+        return to the oldest one. The pause page still handles the final choice.
+      -->
+      <section class="pending-card" aria-labelledby="pendingHeading">
+        <div class="pending-heading">
+          <div>
+            <div class="eyebrow">SAVED, NOT LOST</div>
+            <div id="pendingHeading" class="section-title">
+              Paused-tab queue
+            </div>
+          </div>
+          <strong id="pendingCount" class="pending-count">0</strong>
+        </div>
+        <p id="pendingSummary" class="pending-summary">
+          No paused tabs are waiting. Saved destinations stay local for seven
+          days.
+        </p>
+        <button
+          id="reviewPending"
+          class="primary hidden"
+          type="button"
+        >
+          Review the first saved tab
+        </button>
+        <p
+          id="pendingMessage"
+          class="queue-message hidden"
+          role="status"
+          aria-live="polite"
+        ></p>
+      </section>
+
+      <!--
+        Optional browser-history invitation.
+        `hidden` means popup.js reveals this only when it is relevant.
+      -->
+      <section id="historyIntro" class="history-intro hidden">
+        <div class="eyebrow">OPTIONAL INSIGHT</div>
+        <h2>Find your recurring detours</h2>
+        <p>
+          With optional browser-history access, Behavyour can find repeated
+          return detours, brief visits, checking loops, and partial hyperlink
+          trails. It groups evidence locally and never treats one visit as
+          proof of distraction.
+        </p>
+        <button id="enableHistory" class="primary" type="button">
+          Enable history insights
+        </button>
+        <button id="dismissHistory" class="text-button" type="button">
+          Not now
+        </button>
+      </section>
+
+      <!-- Today's four aggregate behavior measurements. -->
+      <section>
+        <div class="section-title">Today</div>
+        <div class="grid">
+          <div>
+            <strong id="wanders">0</strong>
+            <span>wandering moments</span>
+          </div>
+          <div>
+            <strong id="clicks">0</strong>
+            <span>unresolved clicks</span>
+          </div>
+          <div>
+            <strong id="opened">0</strong>
+            <span>tabs opened</span>
+          </div>
+          <div>
+            <strong id="blocked">0</strong>
+            <span>tabs paused</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Classification of the active website; hidden when no category matches. -->
+      <section id="categoryCard" class="category hidden">
+        <span id="category"></span>
+        <p>
+          This page matches an attention-shifting category. It is a prompt,
+          not a judgment, and the label is editable in the dashboard.
+        </p>
+      </section>
+
+      <!-- Strongest recurring detour found by optional local history analysis. -->
+      <section id="learnedCard" class="category hidden">
+        <span>Learned recurring detour</span>
+        <p id="learnedText"></p>
+      </section>
+
+      <button id="dashboard" class="primary" type="button">
+        Open insights &amp; settings
+      </button>
+    </main>
+
+    <!--
+      IDs such as "timer" and "toggle" are connection points used by popup.js.
+      Keep this script at the bottom so those elements exist before JS runs.
+    -->
+    <script src="popup.js"></script>
+  </body>
+</html>

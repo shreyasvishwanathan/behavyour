@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Full-page settings and insights dashboard. -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Behavyour — Insights &amp; Settings</title>
+    <link rel="stylesheet" href="ui.css">
+    <link rel="stylesheet" href="history.css">
+  </head>
+
+  <body class="dashboard">
+    <!-- Dashboard navigation / product identity. -->
+    <nav>
+      <span class="brand">
+        <b class="mark" aria-hidden="true">B</b>
+        Behavyour
+      </span>
+      <span>Private, on-device attention insights</span>
+    </nav>
+
+    <main>
+      <!--
+        INTRO AND TODAY'S SNAPSHOT
+        The right side shows plain counts. There is deliberately no percentage
+        or "attention score": the extension cannot know how intentional a
+        person was from browser events alone.
+      -->
+      <section class="intro">
+        <div>
+          <div class="eyebrow">NOTICE, RESET, RETURN</div>
+          <h1>See the pattern.<br>Choose the next step.</h1>
+          <p>
+            Behavyour records observable patterns—not judgments about you—and
+            shows the moments when you paused, reset, or returned to your task.
+          </p>
+        </div>
+        <div class="today-summary" aria-label="Today's activity summary">
+          <div class="today-stat">
+            <strong id="todayNoticed">0</strong>
+            <span>patterns noticed</span>
+          </div>
+          <div class="today-stat">
+            <strong id="todayRecovered">0</strong>
+            <span>recovery actions</span>
+          </div>
+          <div class="today-stat">
+            <strong id="todayIntentions">0</strong>
+            <span>intentions written</span>
+          </div>
+        </div>
+      </section>
+
+      <!--
+        DAILY PATTERNS
+        dashboard.js adds one table row per day. A table keeps the real counts
+        legible; differently scaled chart bars could make small numbers look
+        more dramatic than they are.
+      -->
+      <section>
+        <div class="section-title">Daily patterns · last 7 days</div>
+        <p class="hint">
+          Counts describe what Behavyour observed and what you did next. A
+          larger number is not automatically good or bad.
+        </p>
+        <div class="daily-table-wrap">
+          <table class="daily-table">
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                <th scope="col">Mouse patterns</th>
+                <th scope="col">Tab shifts</th>
+                <th scope="col">Feed / link / scroll checkpoints</th>
+                <th scope="col">Hands-off resets</th>
+                <th scope="col">Returned or saved</th>
+                <th scope="col">Intentional opens</th>
+              </tr>
+            </thead>
+            <!-- JavaScript creates the seven body rows inside this element. -->
+            <tbody id="dailyRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!--
+        ON-PAGE PATTERNS
+        These counts separate ordinary link arrivals from moments that crossed
+        a configured checkpoint. The tone count exists only when its optional
+        switch is on; it never represents a diagnosis of the reader.
+      -->
+      <section>
+        <div class="section-title">On-page activity · today</div>
+        <div class="grid behavior-summary">
+          <div>
+            <strong id="todayLinkedVisits">0</strong>
+            <span>linked page arrivals</span>
+          </div>
+          <div>
+            <strong id="todayRabbitCheckpoints">0</strong>
+            <span>deep-trail checkpoints</span>
+          </div>
+          <div>
+            <strong id="todayScrollCheckpoints">0</strong>
+            <span>sustained-scroll checkpoints</span>
+          </div>
+          <div>
+            <strong id="todayInfiniteFeeds">0</strong>
+            <span>ten-visual feed checkpoints</span>
+          </div>
+          <div>
+            <strong id="todayToneWords">0 / 0</strong>
+            <span>negative-list hits / sampled words</span>
+            <small id="todayNegativeTone">0 negative-leaning samples</small>
+          </div>
+        </div>
+        <p class="hint">
+          A linked arrival is counted after an observed link click or usable
+          referrer. Checkpoints ask for intent; ordinary linked arrivals do not.
+          Tone is a small English word-list estimate made only at a scroll
+          checkpoint when you explicitly enable it.
+        </p>
+      </section>
+
+      <div class="columns">
+        <!-- Lifetime counts focus on recoveries rather than inferred failures. -->
+        <section>
+          <div class="section-title">All-time recovery actions</div>
+          <div class="grid big">
+            <div>
+              <strong id="tResets">0</strong>
+              <span>hands-off resets</span>
+            </div>
+            <div>
+              <strong id="tReturned">0</strong>
+              <span>returns to task</span>
+            </div>
+            <div>
+              <strong id="tSaved">0</strong>
+              <span>tabs saved for later</span>
+            </div>
+            <div>
+              <strong id="tIntentions">0</strong>
+              <span>intentions written</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tab-cooldown settings. Wrapping inputs in labels makes text clickable. -->
+        <section>
+          <div class="section-title">Tab pause</div>
+          <label>
+            Cooldown after opening a tab
+            <span>
+              <input id="minutes" type="number" min="0" max="60">
+              minutes
+            </span>
+          </label>
+          <label>
+            <span>
+              <input id="strict" type="checkbox">
+              Pause extra tabs during cooldown
+            </span>
+          </label>
+          <label>
+            <span>
+              <input id="pinned" type="checkbox">
+              Always allow pinned tabs
+            </span>
+          </label>
+          <p class="hint">
+            Extra destinations are kept safely on a pause page. Set 0 to
+            observe tab patterns without starting a cooldown.
+          </p>
+        </section>
+      </div>
+
+      <!--
+        MOUSE COACH SETTINGS
+        These values control when content.js asks for an intention. The reset
+        length is shared by mouse, link, scroll, and feed checkpoints; its limits
+        match the safety limits enforced in JavaScript.
+      -->
+      <section class="coach-settings">
+        <div class="section-title">Mouse coach</div>
+        <p id="mouseCoachExplanation" class="hint">
+          The coach first shows a quiet awareness cue. After several uncertain
+          mouse patterns close together, it asks you to name your next action
+          and complete a short hands-off reset. It never reads what you type on
+          websites.
+        </p>
+        <label>
+          <span>
+            <input
+              id="mouseCoachEnabled"
+              type="checkbox"
+              aria-describedby="mouseCoachExplanation"
+            >
+            Offer an intent prompt and hands-off reset
+          </span>
+        </label>
+        <label>
+          Hands-off reset length (all in-page checkpoints)
+          <span>
+            <input
+              id="mouseResetSeconds"
+              type="number"
+              min="3"
+              max="15"
+              step="1"
+              aria-describedby="mouseCoachExplanation"
+            >
+            seconds
+          </span>
+        </label>
+        <label>
+          Patterns before asking for intent
+          <span>
+            <input
+              id="signalsBeforeIntentPrompt"
+              type="number"
+              min="2"
+              max="5"
+              step="1"
+              aria-describedby="mouseCoachExplanation"
+            >
+            patterns
+          </span>
+        </label>
+      </section>
+
+      <div class="columns coach-columns">
+        <!-- Live link trails use click/referrer evidence and store domains only. -->
+        <section>
+          <div class="section-title">Rabbit-hole checkpoint</div>
+          <p id="rabbitHoleExplanation" class="hint">
+            When several hyperlinks form one trail within 20 minutes, pause the
+            page and ask what you want to do next. Reload and Back do not deepen
+            the trail. Paths and link text are not stored. Turning the pause off
+            keeps the aggregate trail count available in your dashboard.
+          </p>
+          <label>
+            <span>
+              <input
+                id="rabbitHoleCoachEnabled"
+                type="checkbox"
+                aria-describedby="rabbitHoleExplanation"
+              >
+              Offer the deep-trail intent/reset pause
+            </span>
+          </label>
+          <label>
+            Linked pages before checkpoint
+            <span>
+              <input
+                id="rabbitHoleDepth"
+                type="number"
+                min="5"
+                max="12"
+                step="1"
+                aria-describedby="rabbitHoleExplanation"
+              >
+              links
+            </span>
+          </label>
+        </section>
+
+        <!-- Scroll, feed, and screen-tone controls share this panel because all
+             three concern what happens while a page keeps extending downward. -->
+        <section>
+          <div class="section-title">Scrolling and infinite feeds</div>
+          <p id="scrollCoachExplanation" class="hint">
+            After enough active downward scrolling, freeze the page, ask for
+            intent, and require the hands-off reset. This can flag a habit loop;
+            it cannot determine whether you are tired. Turning the pause off
+            keeps aggregate scroll checkpoints available.
+          </p>
+          <label>
+            <span>
+              <input
+                id="scrollCoachEnabled"
+                type="checkbox"
+                aria-describedby="scrollCoachExplanation"
+              >
+              Offer the sustained-scroll intent/reset pause
+            </span>
+          </label>
+          <label>
+            <span>
+              <input
+                id="infiniteFeedCoachEnabled"
+                type="checkbox"
+                aria-describedby="infiniteFeedExplanation"
+              >
+              Hard-lock after 10 new feed visuals
+            </span>
+          </label>
+          <p id="infiniteFeedExplanation" class="hint hard-lock-note">
+            After ten substantial new images or videos load near the viewport
+            following real scrolling, the feed stays locked until both drift
+            questions contain at least 50 words combined. A hands-off reset
+            follows. An ordinary reload restores an unanswered checkpoint in
+            that tab. Turning this off keeps only the aggregate count.
+          </p>
+          <label>
+            Active scrolling before checkpoint
+            <span>
+              <input
+                id="scrollMinutesBeforePrompt"
+                type="number"
+                min="1"
+                max="10"
+                step="1"
+                aria-describedby="scrollCoachExplanation"
+              >
+              minutes
+            </span>
+          </label>
+          <label class="privacy-choice">
+            <span>
+              <input
+                id="screenToneEnabled"
+                type="checkbox"
+                aria-describedby="toneExplanation"
+              >
+              Estimate visible negative tone (optional)
+            </span>
+          </label>
+          <p id="toneExplanation" class="hint tone-warning">
+            Off by default. At a scroll checkpoint only, Behavyour samples at
+            most 500 visible English words locally, discards them immediately,
+            and keeps only counts. It is rough, language-limited, and never
+            triggers a block by itself.
+          </p>
+        </section>
+      </div>
+
+      <div class="columns">
+        <!-- One allowed domain per line. &#10; creates placeholder line breaks. -->
+        <section>
+          <div class="section-title">Allowed sites</div>
+          <p class="hint">
+            Work tools and essential sites can bypass the tab pause.
+          </p>
+          <textarea
+            id="whitelist"
+            aria-label="Allowed website domains"
+            placeholder="docs.google.com&#10;your-work-site.com"
+          ></textarea>
+        </section>
+
+        <!-- User corrections override learned and built-in classifications. -->
+        <section>
+          <div class="section-title">Correct a classification</div>
+          <p class="hint">
+            One per line: <code>domain = category</code>. Categories: video,
+            news, social, entertainment, distraction, neutral.
+          </p>
+          <textarea
+            id="rules"
+            aria-label="Website category corrections"
+            placeholder="youtube.com = video&#10;example.com = neutral"
+          ></textarea>
+        </section>
+      </div>
+
+      <!--
+        OPTIONAL HISTORY LEARNING
+        Chrome exposes visit timestamps, not tab focus or true reading time.
+        The wording below calls this a navigation-continuity estimate rather
+        than pretending the extension can directly measure attention.
+      -->
+      <section class="history-insights-panel">
+        <div class="section-title">History insights</div>
+        <div class="history-row">
+          <div>
+            <b>Learn recurring, low-continuity detours</b>
+            <p class="hint">
+              With optional history access, Behavyour groups the last 30 days
+              into website episodes. It looks for returns to an interrupted
+              site, brief exits, repeat checks, recurrence across days, and the
+              number of different contexts interrupted. Analysis stays here.
+            </p>
+            <p class="hint">
+              Chrome’s warning says “read and change history” because that is
+              the browser’s generic permission label. Behavyour calls only the
+              read methods; disabling this feature revokes the permission and
+              clears its derived results.
+            </p>
+          </div>
+          <div class="history-actions">
+            <button
+              id="historyRefresh"
+              class="secondary compact hidden"
+              type="button"
+            >
+              Analyze now
+            </button>
+            <button id="historyToggle" class="primary compact" type="button">
+              Enable
+            </button>
+          </div>
+        </div>
+
+        <p id="historyAnalysisSummary" class="history-summary" role="status"></p>
+
+        <div id="continuityCard" class="continuity-card hidden">
+          <div>
+            <span class="continuity-kicker">RECENT NAVIGATION CONTINUITY</span>
+            <strong id="continuityValue">—</strong>
+            <span id="continuityLabel">Building a baseline</span>
+          </div>
+          <p id="continuityDetail"></p>
+        </div>
+
+        <div id="linkTrailCard" class="link-trail-card hidden">
+          <div>
+            <span class="continuity-kicker">HISTORICAL LINK ANCESTRY</span>
+            <strong id="historyLinkTrailValue">—</strong>
+            <span id="historyLinkTrailLabel">Building evidence</span>
+          </div>
+          <p id="historyLinkTrailDetail"></p>
+        </div>
+
+        <div class="history-results-grid">
+          <div>
+            <h3>Automatically learned</h3>
+            <p class="hint">
+              Only strong, recurring evidence can add an uncategorized site.
+              Your neutral rules and allowed sites always prevent learning.
+            </p>
+            <div id="learnedList" class="learned-list"></div>
+          </div>
+          <div>
+            <h3>Evidence being watched</h3>
+            <p class="hint">
+              Early signals remain visible but do not change a category. Sites
+              already in an editable category can also appear here.
+            </p>
+            <div id="historyCandidateList" class="history-candidate-list"></div>
+          </div>
+        </div>
+
+        <p class="history-caveat">
+          Important limit: browser history has navigation timestamps but no tab
+          focus, closing time, scrolling, or proof of intent. “Brief” means the
+          next different-site visit appeared within two minutes; it is an
+          estimate, not measured attention or a diagnosis. Near-instant visits
+          are treated as redirect noise rather than distraction evidence.
+          Referring-visit links can reconstruct only partial ancestry; parallel
+          tabs, missing referrers, and history caps can split or hide a trail.
+        </p>
+      </section>
+
+      <!--
+        SESSION LOG
+        Sessions are natural groups of activity separated by a quiet period.
+        JavaScript creates every visible sentence using textContent so a saved
+        intention is displayed as private text, never interpreted as HTML.
+      -->
+      <section>
+        <div class="section-title">Activity sessions</div>
+        <p class="hint">
+          A new session begins after 20 quiet minutes. Open a session to see
+          what Behavyour noticed, what action followed, and any intention you
+          chose to save. Everything below stays on this device.
+        </p>
+        <div id="sessionLog" class="session-log"></div>
+      </section>
+
+      <!-- Plain-language interpretation guidance and the activity reset. -->
+      <section class="method">
+        <div class="section-title">How to read these patterns</div>
+        <p>
+          <b>Mouse pattern:</b> substantial circling, back-and-forth movement,
+          or an uncertain click with no clear page action.
+          <b>Tab shift:</b> an extra tab was paused, or a categorized page was
+          left again quickly. <b>On-page checkpoint:</b> a hyperlink trail,
+          sustained downward-scrolling session, or continuing batch of ten new
+          feed visuals crossed its threshold. A feed lock requires both drift
+          answers and at least 50 words combined.
+          <b>Recovery action:</b> you completed a hands-off
+          reset, returned to the earlier task, or saved a tab for later. These
+          are imperfect observations, not a diagnosis or a grade.
+        </p>
+        <button id="reset" class="danger" type="button">
+          Reset activity statistics
+        </button>
+        <span id="saved" role="status" aria-live="polite"></span>
+      </section>
+    </main>
+
+    <!-- IDs connect this markup to dashboard.js; keep the script after the HTML. -->
+    <script src="dashboard.js"></script>
+  </body>
+</html>

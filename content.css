@@ -1,0 +1,140 @@
+/*
+ * IN-PAGE COACHING STYLES
+ * -----------------------
+ * Chrome injects this file into ordinary webpages beside content.js. Every
+ * name begins with `behavyour-` to reduce clashes with a site's own CSS.
+ */
+
+#behavyour-awareness-cue {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 2147483647;
+  max-width: 360px;
+  padding: 12px 16px;
+  border: 1px solid #65776d;
+  border-radius: 12px;
+  background: #18231d;
+  box-shadow: 0 10px 35px rgb(0 0 0 / 25%);
+  color: #ffffff;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+#behavyour-intent-overlay {
+  /* The overlay intercepts page clicks while the recovery is in progress. */
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(12 19 15 / 78%);
+  backdrop-filter: blur(5px);
+  color: #18231d;
+  font-family: system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+#behavyour-intent-overlay,
+#behavyour-intent-overlay * {
+  box-sizing: border-box;
+}
+
+.behavyour-prompt-panel {
+  width: min(520px, 100%);
+  padding: 32px;
+  border: 1px solid #dcded6;
+  border-radius: 20px;
+  background: #fffdf8;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 35%);
+}
+
+.behavyour-prompt-eyebrow {
+  margin-bottom: 8px;
+  color: #397252;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.behavyour-prompt-panel h2 {
+  margin: 0 0 10px;
+  color: #18231d;
+  font-family: Georgia, serif;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.behavyour-trigger-explanation,
+.behavyour-prompt-guidance {
+  margin: 8px 0 18px;
+  color: #68736c;
+  font-size: 14px;
+}
+
+.behavyour-intent-label {
+  display: block;
+  margin: 18px 0 7px;
+  color: #18231d;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+#behavyour-intent-input,
+.behavyour-reflection-input {
+  display: block;
+  width: 100%;
+  min-height: 90px;
+  padding: 12px;
+  border: 1px solid #aeb8b1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #18231d;
+  font: 15px/1.45 system-ui, sans-serif;
+  resize: vertical;
+}
+
+#behavyour-intent-input:focus,
+.behavyour-reflection-input:focus {
+  border-color: #397252;
+  outline: 3px solid #b9f5cf;
+}
+
+.behavyour-drift-panel {
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.behavyour-drift-panel .behavyour-reflection-input {
+  min-height: 105px;
+}
+
+.behavyour-prompt-panel button {
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 11px;
+  background: #397252;
+  color: #ffffff;
+  font: 750 15px/1.2 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.behavyour-prompt-panel button:disabled {
+  background: #c7cec9;
+  color: #68736c;
+  cursor: not-allowed;
+}
+
+.behavyour-recovery-countdown {
+  display: grid;
+  place-items: center;
+  min-height: 140px;
+  color: #397252;
+  font-size: 64px;
+  font-weight: 750;
+}
