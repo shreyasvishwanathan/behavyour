@@ -1,10 +1,3 @@
-/*
- * PAUSED-TAB CHECKPOINT STYLES
- * ----------------------------
- * This file is intentionally self-contained. The checkpoint cannot inherit a
- * random website's styles because it is an extension-owned page.
- */
-
 :root {
   --ink: #18231d;
   --muted: #68736c;
@@ -158,6 +151,11 @@ button {
   border: 1px solid var(--line);
   background: transparent;
   color: var(--ink);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--green);
+  outline-offset: 3px;
 }
 
 button:disabled {

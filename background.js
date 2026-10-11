@@ -1,24 +1,6 @@
-/*
- * BACKGROUND SERVICE WORKER
- * -------------------------
- * This file is the extension's coordinator. Chrome starts it when a relevant
- * browser event occurs (for example, when a tab opens) and may stop it again
- * when it is idle. That is why durable information lives in
- * `chrome.storage.local`, while an unanswered same-tab feed challenge uses
- * shorter-lived `chrome.storage.session` instead of a normal variable.
- *
- * A service worker has no visible page and cannot directly edit HTML. Its jobs
- * here are:
- *   1. Keep settings and statistics in local extension storage.
- *   2. Categorize visited websites.
- *   3. Enforce the new-tab cooldown.
- *   4. Run the optional browser-history analysis.
- *   5. Answer messages from the popup, dashboard, and content script.
- */
+// Service worker: settings, activity, tab pauses, and optional local history analysis.
 
-// ---------------------------------------------------------------------------
 // Defaults and built-in knowledge
-// ---------------------------------------------------------------------------
 
 const MILLISECONDS_PER_MINUTE = 60 * 1000;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -148,10 +130,7 @@ const DEFAULTS = {
   recent: []
 };
 
-/*
- * These lists are intentionally small and understandable. They are starting
- * guesses, not universal truths. A user's rule overrides these defaults.
- */
+// User rules override these initial category guesses.
 const CATEGORIES = {
   video: [
     "youtube.com",
@@ -191,10 +170,7 @@ const CATEGORIES = {
   ]
 };
 
-/*
- * Content scripts may request only these metric names. Keeping the list here
- * prevents a malformed message from creating arbitrary statistics keys.
- */
+// Only approved content-script metrics can create statistics keys.
 const CONTENT_BEHAVIOR_METRICS = new Set([
   "pointerWanders",
   "pointerLoops",
@@ -212,15 +188,10 @@ const IMMEDIATE_INTENT_METRICS = new Set([
   "infiniteFeedCheckpoints"
 ]);
 
-// ---------------------------------------------------------------------------
 // Small reusable helpers
-// ---------------------------------------------------------------------------
 
 function getLocalDateKey(date) {
-  /*
-   * Build the date from local calendar parts. `toISOString()` uses UTC, which
-   * made a user's "today" change at the wrong hour in many time zones.
-   */
+  // Use local calendar days; ISO dates would roll over at UTC midnight.
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -232,10 +203,6 @@ function getTodayKey() {
 }
 
 function getHost(url) {
-  /*
-   * `new URL(...)` throws an error for blank or browser-internal URLs.
-   * The try/catch makes this helper safe to use on any tab Chrome gives us.
-   */
   try {
     return new URL(url).hostname.replace(/^www\./, "");
   } catch {
@@ -264,14 +231,7 @@ function domainMatches(host, domain) {
 }
 
 async function getState() {
-  /*
-   * Chrome returns stored values when they exist and DEFAULTS for missing
-   * top-level values. The extra merging below also protects old installations
-   * when a newer version introduces another statistic.
-   *
-   * JavaScript note: `{ ...old, ...new }` is object "spread" syntax. Later
-   * values overwrite earlier ones, so stored totals win over empty defaults.
-   */
+  // Merge nested defaults so existing installations retain their data after an update.
   const storedState = await chrome.storage.local.get(DEFAULTS);
 
   storedState.stats = storedState.stats || { days: {}, totals: {} };
@@ -318,25 +278,14 @@ function isWhitelisted(url, currentState) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Website categorization
-// ---------------------------------------------------------------------------
 
 function getCategoryForUrl(url, currentState) {
   const host = getHost(url);
+  if (!host) return null;
 
-  if (!host) {
-    return null;
-  }
-
-  // User corrections have the highest priority.
-  for (const [domain, category] of Object.entries(
-    currentState.categoryRules || {}
-  )) {
-    if (domainMatches(host, domain)) {
-      return category === "neutral" ? null : category;
-    }
-  }
+  const userCategory = getUserCategoryRule(host, currentState);
+  if (userCategory) return userCategory === "neutral" ? null : userCategory;
 
   // Domains inferred by the optional history feature come next.
   const isLearnedDistraction = (
@@ -347,19 +296,10 @@ function getCategoryForUrl(url, currentState) {
     return "learned distraction";
   }
 
-  // Finally, check the small built-in domain lists.
-  for (const [category, domains] of Object.entries(CATEGORIES)) {
-    if (domains.some((domain) => domainMatches(host, domain))) {
-      return category;
-    }
-  }
-
-  return null;
+  return getBuiltInCategory(host) || null;
 }
 
-// ---------------------------------------------------------------------------
 // Optional browser-history analysis
-// ---------------------------------------------------------------------------
 
 let historyDataRevision = 0;
 let historyAnalysisInFlight = null;
@@ -404,11 +344,7 @@ function groupHistoryIntoDomainEpisodes(visits, domainByVisitId) {
       visit.visitTime - previousEpisode.lastActivityAt <= groupingWindow
     );
 
-    /*
-     * Several pages on the same site are one domain episode, not several
-     * interruptions. This prevents reading three articles on one site from
-     * looking like three separate checking habits.
-     */
+    // Nearby pages on one site form a single episode, not repeated interruptions.
     if (belongsToPreviousEpisode) {
       previousEpisode.lastActivityAt = visit.visitTime;
       previousEpisode.transitions.push(visit.transition);
@@ -529,10 +465,7 @@ function explainHistoryPattern(pattern) {
   const qualifiesForLearning =
     repeatedReturnEvidence || fragmentedCheckingEvidence;
 
-  /*
-   * This number only sorts candidates; the interface explains the raw
-   * evidence instead of presenting it as a scientific attention score.
-   */
+  // This weight sorts candidates; it is not an attention score.
   const sortWeight = Math.max(
     0,
     netDetours * 5 +
@@ -586,16 +519,12 @@ function explainHistoryPattern(pattern) {
 }
 
 function prepareHistoryPatternForStorage(summary) {
-  /*
-   * Exact visit times helped with calculation but are unnecessary afterward.
-   * Keep only a local calendar day plus aggregate counts and percentages.
-   */
-  const storedSummary = { ...summary };
-  storedSummary.lastSeenDay = summary.lastSeen
-    ? getLocalDateKey(new Date(summary.lastSeen))
-    : "";
-  delete storedSummary.lastSeen;
-  return storedSummary;
+  // Persist calendar days and aggregates, never exact history timestamps.
+  const { lastSeen, ...storedSummary } = summary;
+  return {
+    ...storedSummary,
+    lastSeenDay: lastSeen ? getLocalDateKey(new Date(lastSeen)) : ""
+  };
 }
 
 function groupEpisodesIntoHistorySessions(episodes) {
@@ -709,11 +638,8 @@ function calculateNavigationContinuity(episodes) {
       Math.min(1, (uniqueDomainCount - 2) / 6)
     );
 
-    /*
-     * This weighted proxy is not a clinical or productivity score. It merely
-     * summarizes how fragmented the visible navigation timestamps were. The
-     * three raw ingredients and exact weights stay here for easy review.
-     */
+    // Descriptive navigation proxy, never a clinical/productivity score or blocking
+    // input.
     const fragmentation = Math.round(
       100 *
         (0.55 * rapidTransitionRatio +
@@ -787,17 +713,8 @@ function calculateNavigationContinuity(episodes) {
 }
 
 function calculateHistoricalLinkTrails(visits) {
-  /*
-   * Chrome gives a visit its `referringVisitId` when it knows which earlier
-   * visit led to it. Following those ids backwards can reconstruct part of a
-   * hyperlink chain. It cannot tell which tab was visible, whether the link
-   * opened beside the old page, or whether a missing referrer means a direct
-   * visit. For that reason this result is descriptive and never auto-blocks.
-   *
-   * Privacy detail: visit ids and the reconstructed chains live only inside
-   * this function. The returned object contains domains and aggregate counts,
-   * never paths, exact timestamps, or ids.
-   */
+  // Referrer ancestry is incomplete and cannot establish tab focus. Keep chains in
+  // memory; persist only domain aggregates.
   const visitById = new Map();
   const parentByVisitId = new Map();
   const childCountByVisitId = new Map();
@@ -839,11 +756,7 @@ function calculateHistoricalLinkTrails(visits) {
   const frequentDomains = new Map();
   let crossDomainTrailCount = 0;
 
-  /*
-   * Start at leaves so one straight A -> B -> C chain is summarized once,
-   * rather than once for every prefix. A branching source can truthfully have
-   * more than one leaf trail.
-   */
+  // Start at leaves to count each chain once, allowing separate trails for branches.
   visits.forEach((leafVisit) => {
     if (
       !parentByVisitId.has(leafVisit.visitId) ||
@@ -886,7 +799,7 @@ function calculateHistoricalLinkTrails(visits) {
       crossDomainTrailCount += 1;
     }
 
-    /* Do not treat the starting page as a deep destination. */
+    // Do not treat the starting page as a deep destination.
     chain.slice(0, -1).forEach((visit) => {
       const domain = getHost(visit.url);
 
@@ -922,11 +835,7 @@ async function readHistoryVisitsInBatches(historyItems) {
   const visits = [];
   let failedUrlCount = 0;
 
-  /*
-   * Asking for thousands of URLs simultaneously can overload the API, and one
-   * rejected Promise would discard an otherwise useful analysis. Groups of 25
-   * keep memory/request pressure bounded; a failed URL is counted and skipped.
-   */
+  // Bound API concurrency; one inaccessible URL must not discard the whole analysis.
   for (
     let startIndex = 0;
     startIndex < historyItems.length;
@@ -983,10 +892,7 @@ async function performHistoryAnalysis() {
   const historyStartTime =
     Date.now() - HISTORY_LOOKBACK_DAYS * MILLISECONDS_PER_DAY;
 
-  /*
-   * `history.search` returns one summary per URL, not every individual visit.
-   * We therefore call `getVisits` for each URL in the next step.
-   */
+  // Chrome search returns URL summaries; getVisits supplies individual visits.
   const historyItems = await chrome.history.search({
     text: "",
     startTime: historyStartTime,
@@ -1009,10 +915,7 @@ async function performHistoryAnalysis() {
     )
     .sort((first, second) => first.visitTime - second.visitTime);
 
-  /*
-   * Visit/referrer ids are used only in memory to recognize cross-domain entry
-   * paths. They are never written into extension storage.
-   */
+  // Visit/referrer IDs stay in memory only.
   const domainByVisitId = new Map(
     visits.map((visit) => [visit.visitId, getHost(visit.url)])
   );
@@ -1057,11 +960,7 @@ async function performHistoryAnalysis() {
       pattern.explicitOpens += 1;
     }
 
-    /*
-     * History has visit timestamps, not tab-focus or close timestamps. The
-     * elapsed time from this episode's first visit until the next domain is
-     * therefore a proxy, never claimed as exact focused or reading time.
-     */
+    // Visit-to-next-domain duration is a proxy, not measured focus or reading time.
     const arrivedFromAnotherRecentContext = Boolean(
       previousEpisode &&
       previousEpisode.domain !== episode.domain &&
@@ -1099,11 +998,7 @@ async function performHistoryAnalysis() {
       }
     }
 
-    /*
-     * Strongest evidence: A -> B -> A inside 10 minutes. A B episode under
-     * five minutes is short enough to be plausible detour evidence. Anything
-     * under ten seconds is treated as a likely redirect and is not a detour.
-     */
+    // Count short A → B → A detours; ignore sub-ten-second redirect-like transitions.
     if (
       previousEpisode &&
       nextEpisode &&
@@ -1131,19 +1026,10 @@ async function performHistoryAnalysis() {
         pattern.interruptedDomains.add(previousEpisode.domain);
       }
 
-      /*
-       * The surrounding A site is evidence of a context the user returned to,
-       * not evidence that A itself was the detour. This counter prevents a
-       * frequently resumed work site from being mislabeled by the weaker
-       * brief/repeat rules below.
-       */
+      // Credit A as a resumed context so it is not mislabeled as the detour.
       getPattern(previousEpisode.domain).contextReturns += 1;
     }
 
-    /*
-     * Another useful clue is A -> B -> C -> B within an hour. It describes a
-     * repeated check after attention moved elsewhere, without guessing why.
-     */
     const priorSameDomain = lastEpisodeByDomain.get(episode.domain);
 
     if (
@@ -1167,20 +1053,13 @@ async function performHistoryAnalysis() {
     });
   });
 
-  /*
-   * Deep-link ancestry is supporting evidence only. It can make a domain
-   * visible for review and sort it higher, but cannot by itself satisfy the
-   * cautious automatic-learning rules in explainHistoryPattern().
-   */
+  // Deep-link evidence may rank candidates but cannot qualify a domain for learning
+  // alone.
   (linkTrails.frequentDeepDomains || []).forEach((entry) => {
     getPattern(entry.domain).deepTrailAppearances = entry.trailAppearances;
   });
 
-  /*
-   * History analysis can take a moment. Re-read user choices before applying
-   * results so a newly added neutral/allowed rule cannot be overwritten by an
-   * analysis that began just before that choice.
-   */
+  // Re-read user choices after analysis so recent corrections and permission changes win.
   const latestState = await getState();
   const permissionStillGranted = await chrome.permissions.contains({
     permissions: ["history"]
@@ -1245,10 +1124,7 @@ async function performHistoryAnalysis() {
     .slice(0, 5)
     .map(prepareHistoryPatternForStorage);
 
-  /*
-   * Existing built-in/user categories remain visible as evidence, but only an
-   * uncategorized domain is added to the learned-distraction category.
-   */
+  // Only uncategorized domains become learned distractions.
   const learnedDistractions = summarizedPatterns
     .filter(
       (pattern) =>
@@ -1276,10 +1152,7 @@ async function performHistoryAnalysis() {
 }
 
 function analyzeHistory() {
-  /*
-   * The daily alarm and an “Analyze now” click can arrive together. Reuse the
-   * work already running instead of launching a second set of history reads.
-   */
+  // Share work when the daily alarm and a manual analysis overlap.
   if (!historyAnalysisInFlight) {
     historyAnalysisInFlight = performHistoryAnalysis().finally(() => {
       historyAnalysisInFlight = null;
@@ -1289,18 +1162,9 @@ function analyzeHistory() {
   return historyAnalysisInFlight;
 }
 
-// ---------------------------------------------------------------------------
 // Statistics and human-readable activity sessions
-// ---------------------------------------------------------------------------
 
-/*
- * Storage updates are "read, change, write" operations. If two updates happen
- * at precisely the same time, one could otherwise overwrite the other. This
- * small queue runs our changes one after another while the worker is awake.
- *
- * JavaScript note: a Promise represents work that will finish later. We chain
- * each new storage task after the prior Promise to preserve their order.
- */
+// Serialize read/change/write operations to avoid lost updates.
 let storageWorkQueue = Promise.resolve();
 
 function runStorageTask(task) {
@@ -1311,12 +1175,7 @@ function runStorageTask(task) {
   return scheduledTask;
 }
 
-/*
- * An unanswered feed reflection belongs to the current browser session, not
- * the long-term activity history. `chrome.storage.session` survives service-
- * worker naps and ordinary page reloads, then clears when the browser session
- * or extension ends. The map uses a tab id as its key.
- */
+// Unanswered feed prompts survive worker restarts in session storage, keyed by tab ID.
 async function getPendingDriftReflections() {
   if (!chrome.storage?.session) {
     return {};
@@ -1330,7 +1189,7 @@ async function getPendingDriftReflections() {
 
     return pending && typeof pending === "object" ? { ...pending } : {};
   } catch {
-    /* The current page can still enforce the prompt without reload recovery. */
+    // The page can still enforce its prompt without reload recovery.
     return {};
   }
 }
@@ -1373,7 +1232,7 @@ async function clearPendingDriftReflection(tabId, eventId = "") {
   ) {
     keyToRemove = tabKey;
   } else if (eventId) {
-    /* Event ids are random and let a restored prompt clear its original tab. */
+    // Random event IDs let a restored prompt clear its original tab.
     keyToRemove = Object.keys(pending).find(
       (key) => pending[key]?.eventId === eventId
     ) || "";
@@ -1431,10 +1290,7 @@ function addEventToCurrentSession(currentState, metric, amount, detail) {
   const sessionGap = SESSION_INACTIVITY_MINUTES * MILLISECONDS_PER_MINUTE;
   let currentSession = currentState.activitySessions[0];
 
-  /*
-   * A session is not a formal focus timer. It is simply a group of noteworthy
-   * actions separated from the previous group by at least 20 quiet minutes.
-   */
+  // Sessions group noteworthy actions; they do not measure focused time.
   if (!currentSession || now - currentSession.lastActivityAt > sessionGap) {
     currentSession = {
       id: createIdentifier("session"),
@@ -1478,12 +1334,7 @@ function addEventToCurrentSession(currentState, metric, amount, detail) {
 function addActivityToState(currentState, metric, amount, detail = {}) {
   incrementStoredMetric(currentState, metric, amount);
 
-  /*
-   * Loops/reversals are specific kinds of pointer wander. Blank/repeated
-   * clicks are specific kinds of low-value click. The aggregate counters keep
-   * old dashboard totals compatible while the specific counters explain what
-   * actually happened.
-   */
+  // Keep legacy aggregate totals alongside the specific signals that explain them.
   if (metric === "pointerLoops" || metric === "pointerReversals") {
     incrementStoredMetric(currentState, "pointerWanders", amount);
   }
@@ -1492,14 +1343,7 @@ function addActivityToState(currentState, metric, amount, detail = {}) {
     incrementStoredMetric(currentState, "lowValueClicks", amount);
   }
 
-  const event = addEventToCurrentSession(
-    currentState,
-    metric,
-    amount,
-    detail
-  );
-
-  return event;
+  return addEventToCurrentSession(currentState, metric, amount, detail);
 }
 
 async function recordActivity(metric, amount = 1, detail = {}) {
@@ -1517,24 +1361,12 @@ async function recordActivity(metric, amount = 1, detail = {}) {
 }
 
 function coachIsEnabledForMetric(currentState, metric) {
-  /*
-   * Each observer has its own switch. Keeping this translation in one place
-   * prevents a disabled mouse coach from accidentally disabling the link or
-   * scroll checkpoint (and vice versa).
-   */
-  if (metric === "rabbitHoleCheckpoints") {
-    return currentState.rabbitHoleCoachEnabled !== false;
-  }
-
-  if (metric === "sustainedScrolling") {
-    return currentState.scrollCoachEnabled !== false;
-  }
-
-  if (metric === "infiniteFeedCheckpoints") {
-    return currentState.infiniteFeedCoachEnabled !== false;
-  }
-
-  return currentState.mouseCoachEnabled !== false;
+  const setting = {
+    rabbitHoleCheckpoints: "rabbitHoleCoachEnabled",
+    sustainedScrolling: "scrollCoachEnabled",
+    infiniteFeedCheckpoints: "infiniteFeedCoachEnabled"
+  }[metric] || "mouseCoachEnabled";
+  return currentState[setting] !== false;
 }
 
 function addBehaviorAndChooseInterventionInState(
@@ -1547,11 +1379,7 @@ function addBehaviorAndChooseInterventionInState(
   const coachEnabled = coachIsEnabledForMetric(currentState, metric);
   let shouldAskForIntent = false;
 
-  /*
-   * The tone sample is only supporting context for a scroll checkpoint. It
-   * never creates its own intervention. This separate count makes the optional
-   * observation legible without storing any sampled page words.
-   */
+  // Tone supplies aggregate context only; sampled words are never retained.
   if (metric === "sustainedScrolling" && currentState.screenToneEnabled) {
     const sampledWords = Math.max(
       0,
@@ -1601,14 +1429,11 @@ function addBehaviorAndChooseInterventionInState(
     now - currentState.lastIntentPromptAt >= promptCooldown;
 
   if (metric === "infiniteFeedCheckpoints") {
-    /* Every ten visuals is a checkpoint; the setting decides whether it locks. */
+    // Every ten visuals is a checkpoint; the setting decides whether it locks.
     shouldAskForIntent = coachEnabled;
   } else if (IMMEDIATE_INTENT_METRICS.has(metric)) {
-    /*
-     * A deep link chain or sustained-scroll threshold already represents many
-     * actions. It therefore asks at the checkpoint itself instead of waiting
-     * for a second unrelated signal. The shared ten-minute rest still applies.
-     */
+    // Link/scroll thresholds already combine many actions; only the shared cooldown
+    // applies.
     shouldAskForIntent = coachEnabled && promptIsRested;
   } else if (coachEnabled) {
     currentState.recentQuestionableSignals =
@@ -1633,7 +1458,7 @@ function addBehaviorAndChooseInterventionInState(
   }
 
   if (metric === "infiniteFeedCheckpoints") {
-    /* The dashboard can then distinguish observation-only mode from a lock. */
+    // Distinguish observation-only checkpoints from blocking prompts.
     event.data.hardLockRequested = shouldAskForIntent;
   }
 
@@ -1695,6 +1520,14 @@ async function recordBehaviorAndChooseIntervention(
   });
 }
 
+function findActivityEvent(currentState, eventId) {
+  for (const session of currentState.activitySessions) {
+    const event = session.events.find((candidate) => candidate.id === eventId);
+    if (event) return { session, event };
+  }
+  return {};
+}
+
 async function attachIntentToActivity(eventId, rawIntent) {
   const intent = String(rawIntent || "").trim().slice(0, 240);
 
@@ -1707,24 +1540,19 @@ async function attachIntentToActivity(eventId, rawIntent) {
 
   return runStorageTask(async () => {
     const currentState = await getState();
-    let matchingEvent = null;
+    const { session, event } = findActivityEvent(currentState, eventId);
 
-    for (const session of currentState.activitySessions) {
-      matchingEvent = session.events.find((event) => event.id === eventId);
-
-      if (matchingEvent) {
-        matchingEvent.intent = intent;
-        session.summary.intentPromptsCompleted =
-          (session.summary.intentPromptsCompleted || 0) + 1;
-        break;
-      }
-    }
-
-    if (!matchingEvent) {
+    if (!event) {
       return { ok: false, error: "The triggering activity was not found." };
     }
 
-    incrementStoredMetric(currentState, "intentPromptsCompleted", 1);
+    // Retried messages may update the answer but must not count it twice.
+    if (!event.intent) {
+      session.summary.intentPromptsCompleted =
+        (session.summary.intentPromptsCompleted || 0) + 1;
+      incrementStoredMetric(currentState, "intentPromptsCompleted", 1);
+    }
+    event.intent = intent;
 
     await chrome.storage.local.set({
       stats: currentState.stats,
@@ -1743,17 +1571,13 @@ function countReflectionWords(text) {
   }
 
   if (REFLECTION_WORD_SEGMENTER) {
-    /*
-     * Intl.Segmenter is the browser's language-aware word splitter. Unlike a
-     * simple space count, it works better for many languages and does not let
-     * fifty punctuation marks masquerade as fifty words.
-     */
+    // Use language-aware word boundaries; punctuation alone does not count.
     return [...REFLECTION_WORD_SEGMENTER.segment(normalizedText)].filter(
       (piece) => piece.isWordLike
     ).length;
   }
 
-  /* Fallback for older Chromium: count letter/number groups in any alphabet. */
+  // Older Chromium: count letter/number groups in any alphabet.
   return (
     normalizedText.match(
       /[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu
@@ -1792,24 +1616,12 @@ async function attachDriftReflection(
 
   return runStorageTask(async () => {
     const currentState = await getState();
-    let matchingEvent = null;
-    let matchingSession = null;
-
-    for (const session of currentState.activitySessions) {
-      matchingEvent = session.events.find((event) => event.id === eventId);
-
-      if (matchingEvent) {
-        matchingSession = session;
-        break;
-      }
-    }
+    const { session: matchingSession, event: matchingEvent } =
+      findActivityEvent(currentState, eventId);
 
     if (!matchingEvent) {
-      /*
-       * The activity log is bounded and can also be reset from the dashboard.
-       * A valid reflection should still release the page if its old event was
-       * pruned while the prompt was open; there is simply nowhere to save it.
-       */
+      // A reset or pruned log must not prevent a valid reflection from releasing the
+      // page.
       await clearPendingDriftReflection(tabId, eventId);
       return { ok: true, wordCount, stored: false };
     }
@@ -1818,7 +1630,7 @@ async function attachDriftReflection(
       return { ok: false, error: "This was not a feed checkpoint." };
     }
 
-    /* A retried message must not increment completion statistics twice. */
+    // A retried message must not count completion twice.
     if (!matchingEvent.reflection) {
       matchingEvent.reflection = {
         initialPoint,
@@ -1841,18 +1653,7 @@ async function attachDriftReflection(
   });
 }
 
-// ---------------------------------------------------------------------------
 // Paused-tab queue and deliberate opening flow
-// ---------------------------------------------------------------------------
-
-/*
- * OLD BEHAVIOR: a tab opened during cooldown was immediately deleted.
- *
- * NEW BEHAVIOR: the tab is redirected to pause.html. Its destination is kept
- * locally under an opaque id, so the user can return, save it for later, or
- * state why it is needed. A permitted intentional opening never disables the
- * overall guard; it grants access to that one destination only.
- */
 
 function pruneExpiredPendingTabs(currentState) {
   const oldestAllowedTime =
@@ -1967,12 +1768,8 @@ async function getPauseContext(queueId, senderTabId) {
       return { ok: false, error: "This paused-tab item is no longer available." };
     }
 
-    /*
-     * A saved item has no browser tab attached to it. When the popup asks to
-     * review that item, the new pause page can load a fraction of a second
-     * before `reviewPendingTab()` finishes saving its tab id. Binding it here
-     * removes that timing race while still requiring the unguessable queue id.
-     */
+    // The review page may load before its new tab ID is saved; bind it using the random
+    // queue ID.
     if (!item.tabId && item.status === "saved" && senderTabId) {
       item.tabId = senderTabId;
       item.status = "waiting";
@@ -1993,10 +1790,7 @@ async function getPauseContext(queueId, senderTabId) {
 }
 
 function messageCameFromPausePage(sender) {
-  /*
-   * Content scripts can also send extension messages. This check makes sure
-   * only our own checkpoint page can ask to reveal or open a queued address.
-   */
+  // Only our own pause page may reveal or open a queued address.
   return Boolean(
     sender.tab?.id &&
     String(sender.url || "").startsWith(chrome.runtime.getURL("pause.html"))
@@ -2127,23 +1921,18 @@ async function resolvePausedTab(queueId, senderTabId, outcome) {
       item.tabId = null;
       item.decisionReadyAt = 0;
       item.intent = "";
-
-      addActivityToState(currentState, "savedForLater", 1, {
-        title: item.title,
-        url: item.destinationUrl,
-        category: item.category
-      });
     } else {
       currentState.pendingTabs = currentState.pendingTabs.filter(
         (candidate) => candidate.id !== queueId
       );
-
-      addActivityToState(currentState, "returnedToTask", 1, {
-        title: item.title,
-        url: item.destinationUrl,
-        category: item.category
-      });
     }
+
+    addActivityToState(
+      currentState,
+      outcome === "saved" ? "savedForLater" : "returnedToTask",
+      1,
+      { title: item.title, url: item.destinationUrl, category: item.category }
+    );
 
     await chrome.storage.local.set({
       pendingTabs: currentState.pendingTabs,
@@ -2224,11 +2013,7 @@ async function captureNavigationInsidePausedTab(tabId, newUrl, title) {
       return null;
     }
 
-    /*
-     * Ctrl+T starts as a blank URL. If the user then types into the omnibox,
-     * Chrome reports the real destination here. We save it and return the same
-     * tab to its pause page, so the typed destination is not lost or bypassed.
-     */
+    // Capture destinations typed after Ctrl+T and keep the same pause in force.
     item.destinationUrl = newUrl;
     item.destinationHost = getHost(newUrl);
     item.title = title || item.destinationHost || item.title;
@@ -2254,9 +2039,7 @@ async function captureNavigationInsidePausedTab(tabId, newUrl, title) {
   return queueId;
 }
 
-// ---------------------------------------------------------------------------
 // Live hyperlink-trail checkpoints
-// ---------------------------------------------------------------------------
 
 function createNavigationTrail(domain, now) {
   return {
@@ -2270,11 +2053,6 @@ function createNavigationTrail(domain, now) {
 }
 
 function copyNavigationTrail(trail) {
-  /*
-   * A link opened in a new tab begins as a copy of the source tab's trail.
-   * This is a manual copy rather than clever cloning machinery so the stored
-   * shape is obvious to a beginner reviewing it.
-   */
   return {
     startedAt: Number(trail.startedAt) || Date.now(),
     lastActivityAt: Number(trail.lastActivityAt) || Date.now(),
@@ -2331,7 +2109,7 @@ async function recordLinkDeparture(message, sender) {
     };
     currentState.navigationTrails[tabKey] = trail;
 
-    /* Only domains and a short-lived timestamp are retained—never link paths. */
+    // Keep only domains and short-lived timestamps, never link paths.
     await chrome.storage.local.set({
       navigationTrails: currentState.navigationTrails
     });
@@ -2405,7 +2183,7 @@ async function recordPageArrival(message, sender) {
     );
 
     if (!arrivedThroughLink) {
-      /* Typed/direct navigation starts a fresh trail; reload/back keeps depth. */
+      // Typed/direct navigation resets the trail; reload/back keeps depth.
       if (!trail || navigationType === "navigate") {
         trail = createNavigationTrail(destinationDomain, now);
       } else {
@@ -2487,9 +2265,7 @@ async function recordPageArrival(message, sender) {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Browser event listeners
-// ---------------------------------------------------------------------------
 
 chrome.runtime.onInstalled.addListener(async () => {
   const existingState = await chrome.storage.local.get(null);
@@ -2532,10 +2308,7 @@ async function clearDerivedHistoryResults(turnFeatureOff) {
   await chrome.storage.local.set(changes);
 }
 
-/*
- * If history is deleted, old inferences should disappear too. We do not keep
- * a shadow copy of conclusions based on visits the user chose to remove.
- */
+// History deletion also clears conclusions based on those visits.
 if (chrome.history?.onVisitRemoved) {
   chrome.history.onVisitRemoved.addListener(() => {
     clearDerivedHistoryResults(false).catch((error) => {
@@ -2544,7 +2317,7 @@ if (chrome.history?.onVisitRemoved) {
   });
 }
 
-/* A manually revoked optional permission also turns its feature setting off. */
+// Revoking history permission turns the feature off.
 chrome.permissions.onRemoved.addListener((removedPermissions) => {
   if (!(removedPermissions.permissions || []).includes("history")) {
     return;
@@ -2555,27 +2328,16 @@ chrome.permissions.onRemoved.addListener((removedPermissions) => {
   });
 });
 
-/*
- * Tab creations can arrive almost simultaneously. Chaining them prevents two
- * rapid Ctrl+T presses from both seeing an old, inactive cooldown.
- */
+// Serialize tab creation decisions so simultaneous tabs cannot bypass the cooldown.
 let newTabDecisionQueue = Promise.resolve();
 
 async function handleNewTabCreated(tab) {
   const currentState = await getState();
 
-  if (!currentState.enabled) {
+  if (!currentState.enabled || (currentState.allowPinned && tab.pinned)) {
     return;
   }
 
-  if (currentState.allowPinned && tab.pinned) {
-    return;
-  }
-
-  /*
-   * `pendingUrl` is the destination Chrome knows before a new tab finishes
-   * loading. It may be absent, so we fall back to the normal URL and then "".
-   */
   const url = tab.pendingUrl || tab.url || "";
 
   // The dashboard is itself a tab and must never lock itself out.
@@ -2591,25 +2353,16 @@ async function handleNewTabCreated(tab) {
   const now = Date.now();
   const cooldownIsActive = now < currentState.lockUntil;
 
-  if (
-    currentState.strictLock &&
-    cooldownIsActive &&
-    !isWhitelisted(url, currentState)
-  ) {
-    await sendTabToPausePage(tab, url);
-    return;
-  }
-
-  /*
-   * An allowed site truly bypasses the current pause: it does not quietly
-   * restart the timer. This is important for login and work-tool flows.
-   */
-  if (cooldownIsActive && isWhitelisted(url, currentState)) {
-    return;
-  }
-
   // Observation-only mode records tabs but does not display a fake cooldown.
   if (!currentState.strictLock) {
+    return;
+  }
+
+  // Allowed sites bypass the active pause without restarting its timer.
+  if (cooldownIsActive) {
+    if (!isWhitelisted(url, currentState)) {
+      await sendTabToPausePage(tab, url);
+    }
     return;
   }
 
@@ -2643,7 +2396,6 @@ chrome.tabs.onCreated.addListener((tab) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
-  // `_tabId` begins with an underscore to show it is required but unused.
   if (changeInfo.url) {
     const navigationWasCaptured = await captureNavigationInsidePausedTab(
       tab.id,
@@ -2709,11 +2461,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const previousTab = currentState.activeTabByWindow[windowKey];
     const now = Date.now();
 
-    /*
-     * A short detour is recorded only when a categorized tab was active for no
-     * more than 30 seconds before the user switched away. We report the fact;
-     * we do not assume that the detour was morally "bad" or block from it.
-     */
+    // A categorized tab left within 30 seconds is recorded as a short detour.
     if (previousTab && previousTab.tabId !== activeTab.id) {
       const durationSeconds = Math.round(
         (now - previousTab.activatedAt) / 1000
@@ -2732,11 +2480,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
       }
     }
 
-    /*
-     * Keep one previous-tab snapshot as well as the active one. Chrome may
-     * announce a new tab's activation before its creation handler finishes;
-     * this lets the pause page still offer a truthful "Return to …" action.
-     */
+    // Activation may precede creation handling; preserve the prior tab for the return
+    // action.
     const previousSnapshot =
       previousTab && previousTab.tabId !== activeTab.id
         ? {
@@ -2771,10 +2516,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       (candidate) => candidate.tabId === tabId
     );
 
-    /*
-     * Closing a pause page does not silently destroy its destination. It moves
-     * into Later and expires after seven days. Explicit "Return" removes it.
-     */
+    // Closing a pause page saves its destination for seven days; explicit Return removes
+    // it.
     if (item) {
       item.tabId = null;
       item.status = "saved";
@@ -2796,7 +2539,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       }
     }
 
-    /* A closed tab can no longer continue its live hyperlink trail. */
     delete currentState.navigationTrails[String(tabId)];
     await clearPendingDriftReflection(tabId);
 
@@ -2812,18 +2554,24 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Messages from the popup, dashboard, and content script
-// ---------------------------------------------------------------------------
 
 async function handleMessage(message, sender) {
+  if (!message || typeof message.type !== "string") {
+    return { ok: false, error: "A message type is required." };
+  }
+
+  if (
+    ["getPauseContext", "beginIntentionalOpen", "completeIntentionalOpen",
+      "returnToTask", "saveForLater"].includes(message.type) &&
+    !messageCameFromPausePage(sender)
+  ) {
+    return { ok: false, error: "Only a Behavyour pause page can do that." };
+  }
+
   switch (message.type) {
     case "getContentSettings": {
-      /*
-       * Ordinary webpages need only these few values. Returning a narrow
-       * object avoids copying the dashboard's history/session data into every
-       * page merely to configure its observer.
-       */
+      // Pages receive observer settings without dashboard history/session data.
       const currentState = await getState();
       const relevantUrl = sender.tab?.url || "";
       const infiniteFeedCoachEnabled =
@@ -2831,11 +2579,8 @@ async function handleMessage(message, sender) {
       let pendingDriftReflection =
         await getPendingDriftReflectionForTab(sender.tab?.id);
 
-      /*
-       * Turning the feature or the whole extension off is the deliberate
-       * emergency exit. On the next page load, discard that tab's challenge
-       * instead of surprising the user if they enable the coach much later.
-       */
+      // Disabling protection clears the challenge so it cannot return after a later
+      // re-enable.
       if (
         pendingDriftReflection &&
         (!currentState.enabled || !infiniteFeedCoachEnabled)
@@ -2871,14 +2616,15 @@ async function handleMessage(message, sender) {
         return { ok: false, error: "Unknown behavior metric." };
       }
 
+      const amount = message.amount ?? 1;
+      if (!Number.isSafeInteger(amount) || amount < 1) {
+        return { ok: false, error: "Behavior counts must be positive integers." };
+      }
+
       return recordBehaviorAndChooseIntervention(
         message.metric,
-        message.amount || 1,
+        amount,
         {
-          /*
-           * JavaScript note: `?.` is optional chaining. It returns undefined
-           * instead of crashing when a message did not come from a browser tab.
-           */
           title: sender.tab?.title,
           url: sender.tab?.url,
           data: message.data || {}
@@ -2899,10 +2645,6 @@ async function handleMessage(message, sender) {
       );
 
     case "getState": {
-      /*
-       * Braces around this case create a private scope for `currentState`, so
-       * another case could safely use the same variable name.
-       */
       const currentState = await getState();
       const relevantUrl = message.url || sender.tab?.url;
       const historyPermissionGranted = await chrome.permissions.contains({
@@ -2920,11 +2662,7 @@ async function handleMessage(message, sender) {
     case "pause": {
       const currentState = await getState();
 
-      /*
-       * The toolbar can no longer switch protection off in the middle of a
-       * cooldown. That removes the easiest reflexive escape. Browser extension
-       * settings remain an emergency exit that the extension cannot prevent.
-       */
+      // The toolbar cannot disable protection during an active cooldown.
       if (Date.now() < currentState.lockUntil) {
         return {
           ok: false,
@@ -2958,15 +2696,9 @@ async function handleMessage(message, sender) {
       return { ok: true };
 
     case "getPauseContext":
-      if (!messageCameFromPausePage(sender)) {
-        return { ok: false, error: "Only a Behavyour pause page can do that." };
-      }
       return getPauseContext(message.queueId, sender.tab?.id);
 
     case "beginIntentionalOpen":
-      if (!messageCameFromPausePage(sender)) {
-        return { ok: false, error: "Only a Behavyour pause page can do that." };
-      }
       return beginIntentionalOpen(
         message.queueId,
         sender.tab?.id,
@@ -2974,15 +2706,9 @@ async function handleMessage(message, sender) {
       );
 
     case "completeIntentionalOpen":
-      if (!messageCameFromPausePage(sender)) {
-        return { ok: false, error: "Only a Behavyour pause page can do that." };
-      }
       return completeIntentionalOpen(message.queueId, sender.tab?.id);
 
     case "returnToTask":
-      if (!messageCameFromPausePage(sender)) {
-        return { ok: false, error: "Only a Behavyour pause page can do that." };
-      }
       return resolvePausedTab(
         message.queueId,
         sender.tab?.id,
@@ -2990,9 +2716,6 @@ async function handleMessage(message, sender) {
       );
 
     case "saveForLater":
-      if (!messageCameFromPausePage(sender)) {
-        return { ok: false, error: "Only a Behavyour pause page can do that." };
-      }
       return resolvePausedTab(
         message.queueId,
         sender.tab?.id,
@@ -3021,11 +2744,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     });
 
-  /*
-   * Chrome expects a literal `true` here when the answer will arrive after
-   * this listener returns. Without it, the message channel may close before
-   * the async work above finishes. This is browser-API plumbing, not a truthy
-   * success result.
-   */
+  // Keep the message channel open until the asynchronous response arrives.
   return true;
 });

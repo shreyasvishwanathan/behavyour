@@ -1,29 +1,9 @@
-/*
- * WEBPAGE BEHAVIOR OBSERVER AND ATTENTION COACH
- * ---------------------------------------------
- * Chrome places this file inside ordinary webpages. It recognizes a few
- * observable patterns, sends small summaries to background.js, and occasionally
- * presents an intent prompt followed by a hands-off reset.
- *
- * Important privacy boundary:
- *   - Coordinates exist only long enough to calculate movement shape.
- *   - We store rounded distance/count/duration, never raw coordinates.
- *   - We never read typed text, passwords, or form values.
- *   - If the optional screen-tone switch is on, a small visible-text sample is
- *     counted only when sustained scrolling reaches its checkpoint. The words
- *     themselves are immediately discarded; only a small aggregate summary
- *     leaves this file.
- *   - The only text saved is what the user deliberately writes in our prompt.
- */
+/* In-page observation sends aggregate counts, never coordinates or form values.
+ * Optional tone sampling discards source text. Only answers deliberately entered
+ * in Behavyour prompts are saved. */
 
-/*
- * JavaScript note: this is an IIFE (Immediately Invoked Function Expression).
- * It runs now and keeps its variables private from the webpage's own scripts.
- */
 (() => {
-  // -------------------------------------------------------------------------
   // Observable thresholds
-  // -------------------------------------------------------------------------
 
   const MINIMUM_MOVES_FOR_WANDER = 25;
   const MINIMUM_DISTANCE_FOR_WANDER = 700;
@@ -60,11 +40,7 @@
     "ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "
   ]);
 
-  /*
-   * A deliberately small English word list keeps tone estimation transparent
-   * and cheap. It is not a machine-learning model and cannot understand
-   * sarcasm, negation, quoted speech, or other languages.
-   */
+  // English-only word counts cannot interpret negation, sarcasm, or quoted speech.
   const NEGATIVE_TONE_WORDS = new Set([
     "abuse", "afraid", "anger", "angry", "anxious", "attack", "awful",
     "crisis", "cruel", "danger", "dead", "death", "disaster",
@@ -79,10 +55,7 @@
     "thanks", "thoughtful", "welcome", "wonderful"
   ]);
 
-  /*
-   * These are common elements where a click normally has a clear outcome.
-   * Custom website controls are imperfect, so click signals never hard-block.
-   */
+  // Custom controls are imperfect: click signals never hard-block on their own.
   const INTERACTIVE_ELEMENT_SELECTOR = [
     "a",
     "button",
@@ -108,47 +81,47 @@
     "[contenteditable='true']"
   ].join(",");
 
-  // -------------------------------------------------------------------------
   // Settings cached from extension storage
-  // -------------------------------------------------------------------------
 
-  let extensionEnabled = false;
-  let mouseCoachEnabled = true;
-  let rabbitHoleCoachEnabled = true;
-  let scrollCoachEnabled = true;
-  let scrollMinutesBeforePrompt = 2;
-  let infiniteFeedCoachEnabled = true;
-  let screenToneEnabled = false;
+  const settings = {
+    enabled: false,
+    mouseCoachEnabled: true,
+    rabbitHoleCoachEnabled: true,
+    scrollCoachEnabled: true,
+    scrollMinutesBeforePrompt: 2,
+    infiniteFeedCoachEnabled: true,
+    screenToneEnabled: false
+  };
   let currentPageCategory = "";
+
+  function updateSettings(values) {
+    for (const key of Object.keys(settings)) {
+      if (key in values) {
+        settings[key] = key === "scrollMinutesBeforePrompt"
+          ? Math.max(1, Math.min(10, Number(values[key]) || 2))
+          : Boolean(values[key]);
+      }
+    }
+
+    if (!settings.enabled) {
+      scrollSession = null;
+      resetMovementBurst();
+      resetInfiniteFeedSequence();
+    }
+  }
 
   async function loadSettings(reportThisPage = true) {
     try {
       const currentState = await chrome.runtime.sendMessage({
         type: "getContentSettings"
       });
-
-      extensionEnabled = Boolean(currentState.enabled);
-      mouseCoachEnabled = Boolean(currentState.mouseCoachEnabled);
-      rabbitHoleCoachEnabled = Boolean(currentState.rabbitHoleCoachEnabled);
-      scrollCoachEnabled = Boolean(currentState.scrollCoachEnabled);
-      scrollMinutesBeforePrompt = Math.max(
-        1,
-        Math.min(10, Number(currentState.scrollMinutesBeforePrompt) || 2)
-      );
-      infiniteFeedCoachEnabled = Boolean(
-        currentState.infiniteFeedCoachEnabled
-      );
-      screenToneEnabled = Boolean(currentState.screenToneEnabled);
+      updateSettings(currentState);
       currentPageCategory = currentState.category || "";
 
-      /*
-       * A normal reload must not become a one-keystroke escape from the hard
-       * checkpoint. background.js remembers an unanswered challenge for this
-       * tab for the rest of the browser session and returns it here.
-       */
+      // Restore an unanswered feed checkpoint after a page reload.
       if (
-        extensionEnabled &&
-        infiniteFeedCoachEnabled &&
+        settings.enabled &&
+        settings.infiniteFeedCoachEnabled &&
         !intentPromptIsVisible &&
         currentState.pendingDriftReflection?.eventId
       ) {
@@ -158,77 +131,28 @@
         );
       }
 
-      if (extensionEnabled && reportThisPage) {
+      if (settings.enabled && reportThisPage) {
         reportPageArrival();
       }
     } catch {
-      // An extension reload can temporarily disconnect an older content script.
-      extensionEnabled = false;
+      // Extension reloads can disconnect an older content script.
+      settings.enabled = false;
     }
   }
 
-  /*
-   * This listener keeps a page that has been open for hours in sync with the
-   * toolbar switch. It receives changes only from this extension's storage.
-   */
   chrome.storage.onChanged.addListener((changes, storageArea) => {
-    if (storageArea !== "local") {
-      return;
-    }
+    if (storageArea !== "local") return;
 
-    if (changes.enabled) {
-      extensionEnabled = Boolean(changes.enabled.newValue);
+    updateSettings(Object.fromEntries(
+      Object.entries(changes).map(([key, change]) => [key, change.newValue])
+    ));
 
-      if (!extensionEnabled) {
-        scrollSession = null;
-        resetMovementBurst();
-        resetInfiniteFeedSequence();
-      }
-    }
-
-    if (changes.mouseCoachEnabled) {
-      mouseCoachEnabled = Boolean(changes.mouseCoachEnabled.newValue);
-    }
-
-    if (changes.rabbitHoleCoachEnabled) {
-      rabbitHoleCoachEnabled = Boolean(
-        changes.rabbitHoleCoachEnabled.newValue
-      );
-    }
-
-    if (changes.scrollCoachEnabled) {
-      scrollCoachEnabled = Boolean(changes.scrollCoachEnabled.newValue);
-    }
-
-    if (changes.scrollMinutesBeforePrompt) {
-      scrollMinutesBeforePrompt = Math.max(
-        1,
-        Math.min(
-          10,
-          Number(changes.scrollMinutesBeforePrompt.newValue) || 2
-        )
-      );
-    }
-
-    if (changes.infiniteFeedCoachEnabled) {
-      infiniteFeedCoachEnabled = Boolean(
-        changes.infiniteFeedCoachEnabled.newValue
-      );
-    }
-
-    if (changes.screenToneEnabled) {
-      screenToneEnabled = Boolean(changes.screenToneEnabled.newValue);
-    }
-
-    /* Classification can change while a long-lived page remains open. */
     if (changes.categoryRules || changes.learnedDistractions) {
       loadSettings(false);
     }
   });
 
-  // -------------------------------------------------------------------------
   // Live hyperlink-trail messages
-  // -------------------------------------------------------------------------
 
   function getDomainFromUrl(url) {
     try {
@@ -239,10 +163,7 @@
   }
 
   function getNavigationType() {
-    /*
-     * The Performance API distinguishes a normal arrival from Reload and
-     * Back/Forward. Only a normal link-like arrival should deepen a trail.
-     */
+    // Reload and Back/Forward must not deepen a link trail.
     const [navigationEntry] = performance.getEntriesByType("navigation");
     return navigationEntry?.type || "navigate";
   }
@@ -268,7 +189,7 @@
           "rabbitHoleCheckpoints",
           response.resetSeconds
         );
-      } else if (response.coachEnabled ?? rabbitHoleCoachEnabled) {
+      } else if (response.coachEnabled ?? settings.rabbitHoleCoachEnabled) {
         showAwarenessCue(descriptionForMetric("rabbitHoleCheckpoints"));
       }
     } catch {
@@ -305,22 +226,13 @@
     const addressBeforeClick = location.href;
     const sourceDomain = getDomainFromUrl(addressBeforeClick);
 
-    /*
-     * Send only the destination origin (for example https://example.com), not
-     * its path or query. background.js needs the domain to match the arrival;
-     * it does not need the specific article title or search terms.
-     */
+    // Send only the origin; paths and queries can reveal articles or search terms.
     chrome.runtime.sendMessage({
       type: "linkDeparture",
       destinationUrl: destination.origin
     }).catch(() => {});
 
-    /*
-     * Single-page apps can change their URL without loading content.js again.
-     * If this script is still alive and the address changed, report that as a
-     * confirmed in-page link arrival. A full page load destroys this timer and
-     * the new page reports itself normally, so the visit is not counted twice.
-     */
+    // SPA links keep this script alive; a full page load destroys the timer.
     setTimeout(() => {
       if (location.href !== addressBeforeClick) {
         reportPageArrival("spa", sourceDomain);
@@ -328,9 +240,7 @@
     }, 900);
   }
 
-  // -------------------------------------------------------------------------
   // Temporary movement state — none of this is persisted
-  // -------------------------------------------------------------------------
 
   let moveCount = 0;
   let distanceTravelled = 0;
@@ -394,9 +304,7 @@
     resetMovementBurst();
   }
 
-  // -------------------------------------------------------------------------
   // False-positive safeguards
-  // -------------------------------------------------------------------------
 
   function pageIsInSensitiveInteraction() {
     const activeElement = document.activeElement;
@@ -417,7 +325,7 @@
 
   function shouldIgnorePointerEvent(event) {
     return Boolean(
-      !extensionEnabled ||
+      !settings.enabled ||
       intentPromptIsVisible ||
       !event.isTrusted ||
       event.pointerType === "touch" ||
@@ -426,9 +334,7 @@
     );
   }
 
-  // -------------------------------------------------------------------------
   // Human-readable, privacy-limited descriptions
-  // -------------------------------------------------------------------------
 
   function describePageRegion(clientX, clientY) {
     let horizontal = "center";
@@ -492,20 +398,18 @@
     return descriptions[metric] || "An uncertain interaction pattern appeared.";
   }
 
-  // -------------------------------------------------------------------------
   // Sending one summarized event to background.js
-  // -------------------------------------------------------------------------
 
   function localCoachIsEnabled(metric) {
     if (metric === "sustainedScrolling") {
-      return scrollCoachEnabled;
+      return settings.scrollCoachEnabled;
     }
 
     if (metric === "infiniteFeedCheckpoints") {
-      return infiniteFeedCoachEnabled;
+      return settings.infiniteFeedCoachEnabled;
     }
 
-    return mouseCoachEnabled;
+    return settings.mouseCoachEnabled;
   }
 
   async function reportQuestionableAction(metric, data) {
@@ -586,9 +490,7 @@
     }
   }
 
-  // -------------------------------------------------------------------------
   // Sustained-scroll observation and optional visible-tone sampling
-  // -------------------------------------------------------------------------
 
   function getScrollSnapshot(eventTarget) {
     const pageScroller = document.scrollingElement || document.documentElement;
@@ -635,11 +537,7 @@
   }
 
   function sampleVisibleTone() {
-    /*
-     * Sampling fifteen viewport points avoids walking the full page DOM. From
-     * each point we take the nearest normal text block, never an input. Text is
-     * capped twice (characters and words), counted here, then discarded.
-     */
+    // Sample fifteen viewport points, cap text, count words, then discard the text.
     const textBlockSelector = [
       "p", "li", "blockquote", "h1", "h2", "h3", "figcaption",
       "[role='article']"
@@ -733,7 +631,7 @@
     const now = Date.now();
 
     if (
-      !extensionEnabled ||
+      !settings.enabled ||
       intentPromptIsVisible ||
       document.hidden ||
       now - lastUserScrollInputAt > USER_SCROLL_INPUT_WINDOW
@@ -811,7 +709,7 @@
     );
     const hasEnoughActiveTime =
       scrollSession.activeMilliseconds >=
-      scrollMinutesBeforePrompt * 60 * 1000;
+      settings.scrollMinutesBeforePrompt * 60 * 1000;
     const hasEnoughScrolling = Boolean(
       downwardScreens >= MINIMUM_DOWNWARD_SCREENS &&
       scrollSession.bursts >= MINIMUM_SCROLL_BURSTS
@@ -833,7 +731,7 @@
       return;
     }
 
-    const toneSummary = screenToneEnabled
+    const toneSummary = settings.screenToneEnabled
       ? sampleVisibleTone()
       : null;
     const data = {
@@ -855,9 +753,7 @@
     reportQuestionableAction("sustainedScrolling", data);
   }
 
-  // -------------------------------------------------------------------------
   // Newly loaded media in an infinite feed
-  // -------------------------------------------------------------------------
 
   function resetInfiniteFeedSequence() {
     newMediaLoads = 0;
@@ -884,13 +780,8 @@
             .filter(Boolean)
         : [];
 
-      /*
-       * Prefer the declared source. During virtualized-feed reuse, `src` can
-       * already contain the new item while `currentSrc` briefly reports the
-       * old loaded item. Looking at `currentSrc` first would miss that change.
-       * Responsive `<picture>` URLs live on sibling `source` elements, so they
-       * join the signature as well.
-       */
+      // Virtualized feeds can change src before currentSrc updates. Include picture
+      // sources so responsive images are also recognized.
       const declaredImageSources = [
         ...pictureSources,
         mediaElement.getAttribute("srcset") || "",
@@ -951,7 +842,7 @@
 
   function countLoadedFeedMedia(mediaElement, expectedSource) {
     if (
-      !extensionEnabled ||
+      !settings.enabled ||
       intentPromptIsVisible ||
       infiniteFeedPromptPending ||
       document.hidden ||
@@ -965,11 +856,7 @@
 
     const now = Date.now();
 
-    /*
-     * "Ten loads" means one continuing feed run. If no qualifying media has
-     * appeared for 45 seconds, the next item begins a fresh sequence instead
-     * of completing a batch that started much earlier in the day.
-     */
+    // Idle sequences expire instead of accumulating unrelated loads all day.
     if (
       lastFeedMediaAt &&
       now - lastFeedMediaAt > MEDIA_SEQUENCE_IDLE_TIME
@@ -1028,7 +915,7 @@
     }
 
     if (
-      !extensionEnabled ||
+      !settings.enabled ||
       intentPromptIsVisible ||
       infiniteFeedPromptPending ||
       document.hidden ||
@@ -1108,68 +995,33 @@
     const observer = new MutationObserver((mutationRecords) => {
       let examinedMedia = 0;
 
-      function findMediaOwnedBySource(sourceElement) {
-        const parentVideo = sourceElement.closest("video");
-
-        if (parentVideo) {
-          return parentVideo;
+      function offerMedia(node) {
+        const media = node.matches("source")
+          ? node.closest("video") || node.closest("picture")?.querySelector("img")
+          : node.matches("img, video") ? node : null;
+        if (media && examinedMedia < MAXIMUM_MEDIA_PER_MUTATION_BATCH) {
+          examinedMedia += 1;
+          watchPotentialFeedMedia(media);
         }
-
-        /* In a responsive picture, one img displays the chosen source. */
-        return sourceElement.closest("picture")?.querySelector("img") || null;
       }
 
-      function offerMedia(mediaElement) {
-        if (examinedMedia >= MAXIMUM_MEDIA_PER_MUTATION_BATCH) {
-          return;
-        }
-
-        examinedMedia += 1;
-        watchPotentialFeedMedia(mediaElement);
-      }
-
-      mutationRecords.forEach((record) => {
-        if (examinedMedia >= MAXIMUM_MEDIA_PER_MUTATION_BATCH) {
-          return;
-        }
-
+      for (const record of mutationRecords) {
+        if (examinedMedia >= MAXIMUM_MEDIA_PER_MUTATION_BATCH) break;
         if (record.type === "attributes") {
-          if (record.target.matches("img, video")) {
-            offerMedia(record.target);
-          } else if (record.target.matches("source")) {
-            const parentMedia = findMediaOwnedBySource(record.target);
-
-            if (parentMedia) {
-              offerMedia(parentMedia);
-            }
-          }
-
-          return;
+          offerMedia(record.target);
+          continue;
         }
 
-        record.addedNodes.forEach((addedNode) => {
-          if (
-            examinedMedia >= MAXIMUM_MEDIA_PER_MUTATION_BATCH ||
-            !(addedNode instanceof Element)
-          ) {
-            return;
+        for (const node of record.addedNodes) {
+          if (examinedMedia >= MAXIMUM_MEDIA_PER_MUTATION_BATCH) break;
+          if (!(node instanceof Element)) continue;
+          offerMedia(node);
+          for (const media of node.querySelectorAll("img, video")) {
+            if (examinedMedia >= MAXIMUM_MEDIA_PER_MUTATION_BATCH) break;
+            offerMedia(media);
           }
-
-          if (addedNode.matches("img, video")) {
-            offerMedia(addedNode);
-          } else if (addedNode.matches("source")) {
-            const parentMedia = findMediaOwnedBySource(addedNode);
-
-            if (parentMedia) {
-              offerMedia(parentMedia);
-            }
-          }
-
-          [...addedNode.querySelectorAll("img, video")]
-            .slice(0, MAXIMUM_MEDIA_PER_MUTATION_BATCH - examinedMedia)
-            .forEach(offerMedia);
-        });
-      });
+        }
+      }
     });
 
     observer.observe(document.documentElement, {
@@ -1191,9 +1043,7 @@
     );
   }
 
-  // -------------------------------------------------------------------------
   // Recognizing movement shape
-  // -------------------------------------------------------------------------
 
   function evaluateMovementBurst() {
     if (!firstPoint || !previousPoint) {
@@ -1268,9 +1118,7 @@
     return cosineOfAngle < -0.6;
   }
 
-  // -------------------------------------------------------------------------
   // Awareness cue and required intent prompt
-  // -------------------------------------------------------------------------
 
   function showAwarenessCue(message) {
     if (
@@ -1313,7 +1161,6 @@
     document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
 
-    /* Return a function that puts the page back exactly as it was. */
     return function restorePageScrolling() {
       document.documentElement.style.overflow = oldDocumentOverflow;
       document.body.style.overflow = oldBodyOverflow;
@@ -1333,11 +1180,7 @@
         event.target.closest(".behavyour-prompt-panel")
       );
 
-      /*
-       * The long reflection panel must remain scrollable on a small screen.
-       * Only movement on the dark area is cancelled; the page itself is also
-       * protected by the overflow lock in `lockPageScrollingForPrompt()`.
-       */
+      // Keep the panel scrollable; only block scrolling on the backdrop.
       if (!eventStartedInsidePanel) {
         event.preventDefault();
       }
@@ -1389,10 +1232,7 @@
     }
 
     if (REFLECTION_WORD_SEGMENTER) {
-      /*
-       * This browser feature recognizes word-like pieces in many languages.
-       * Punctuation-only chunks do not satisfy the reflection requirement.
-       */
+      // Count word-like pieces across languages; punctuation alone is not an answer.
       return [...REFLECTION_WORD_SEGMENTER.segment(normalizedText)].filter(
         (piece) => piece.isWordLike
       ).length;
@@ -1412,38 +1252,14 @@
     }
 
     infiniteFeedPromptPending = true;
-    intentPromptIsVisible = true;
-    recoveryTriggerMetric = "infiniteFeedCheckpoints";
-    const previouslyFocusedElement = document.activeElement;
-    const restorePageScrolling = lockPageScrollingForPrompt();
-    const overlay = createBlockingPromptOverlay();
-    const panel = document.createElement("div");
-    panel.className = "behavyour-prompt-panel behavyour-drift-panel";
-    overlay.append(panel);
-
-    const eyebrow = addPromptText(
-      panel,
-      "div",
+    const prompt = createPrompt(
+      "infiniteFeedCheckpoints",
       "INFINITE FEED CHECKPOINT",
-      "behavyour-prompt-eyebrow"
+      "Is this still what you came here for?",
+      "Ten new images or videos loaded after scrolling. Answer both questions " +
+        "in at least 50 words combined to continue. Your answers stay on this device."
     );
-    eyebrow.setAttribute("aria-hidden", "true");
-
-    const title = addPromptText(
-      panel,
-      "h2",
-      "Reconnect where you began to where the feed took you"
-    );
-    title.id = "behavyour-prompt-title";
-
-    addPromptText(
-      panel,
-      "p",
-      "Ten new, substantial images or videos loaded after scrolling. " +
-        "The feed stays locked until both questions contain at least 50 " +
-        "words combined.",
-      "behavyour-trigger-explanation"
-    );
+    const { overlay, panel } = prompt;
 
     const initialLabel = addPromptText(
       panel,
@@ -1455,7 +1271,6 @@
 
     const initialInput = document.createElement("textarea");
     initialInput.id = "behavyour-initial-point";
-    initialInput.className = "behavyour-reflection-input";
     initialInput.rows = 4;
     initialInput.maxLength = 2000;
     initialInput.placeholder =
@@ -1472,7 +1287,6 @@
 
     const currentInput = document.createElement("textarea");
     currentInput.id = "behavyour-current-point";
-    currentInput.className = "behavyour-reflection-input";
     currentInput.rows = 4;
     currentInput.maxLength = 2000;
     currentInput.placeholder =
@@ -1517,34 +1331,12 @@
       continueButton.disabled = true;
       progress.textContent = "Saving your reflection on this device…";
 
-      try {
-        const response = await chrome.runtime.sendMessage({
-          type: "recordDriftReflection",
-          eventId,
-          initialPoint: initialInput.value,
-          currentPoint: currentInput.value
-        });
-
-        if (!response?.ok) {
-          progress.textContent =
-            response?.error || "The reflection could not be saved. Try again.";
-          continueButton.disabled = false;
-          return;
-        }
-
-        beginHandsOffReset(
-          overlay,
-          panel,
-          Number(resetSeconds) || 5,
-          previouslyFocusedElement,
-          restorePageScrolling
-        );
-      } catch {
-        progress.textContent =
-          "The extension could not save this yet. Your answers remain here; " +
-          "try the button again.";
-        continueButton.disabled = false;
-      }
+      await savePromptAndReset(prompt, progress, continueButton, resetSeconds, {
+        type: "recordDriftReflection",
+        eventId,
+        initialPoint: initialInput.value,
+        currentPoint: currentInput.value
+      });
     });
 
     document.body.append(overlay);
@@ -1556,43 +1348,13 @@
       return;
     }
 
-    intentPromptIsVisible = true;
-    recoveryTriggerMetric = triggerMetric;
-    const previouslyFocusedElement = document.activeElement;
-
-    /*
-     * This is the enforceable part of the in-page checkpoint: the underlying
-     * page cannot keep scrolling while the user writes an intent and completes
-     * the hands-off reset. The exact prior inline styles are restored later.
-     */
-    const restorePageScrolling = lockPageScrollingForPrompt();
-    const overlay = createBlockingPromptOverlay();
-
-    const panel = document.createElement("div");
-    panel.className = "behavyour-prompt-panel";
-    overlay.append(panel);
-
-    const eyebrow = addPromptText(
-      panel,
-      "div",
+    const prompt = createPrompt(
+      triggerMetric,
       "A MOMENT TO NOTICE",
-      "behavyour-prompt-eyebrow"
+      "What were you trying to do just now?",
+      descriptionForMetric(triggerMetric)
     );
-    eyebrow.setAttribute("aria-hidden", "true");
-
-    const title = addPromptText(
-      panel,
-      "h2",
-      "What were you trying to do just now?"
-    );
-    title.id = "behavyour-prompt-title";
-
-    addPromptText(
-      panel,
-      "p",
-      descriptionForMetric(triggerMetric),
-      "behavyour-trigger-explanation"
-    );
+    const { overlay, panel } = prompt;
 
     const label = addPromptText(
       panel,
@@ -1637,37 +1399,51 @@
       continueButton.disabled = true;
       guidance.textContent = "Saving your intent…";
 
-      const response = await chrome.runtime.sendMessage({
+      await savePromptAndReset(prompt, guidance, continueButton, resetSeconds, {
         type: "recordIntent",
         eventId,
         intent: intentInput.value
       });
-
-      if (!response.ok) {
-        guidance.textContent = response.error;
-        continueButton.disabled = false;
-        return;
-      }
-
-      beginHandsOffReset(
-        overlay,
-        panel,
-        Number(resetSeconds) || 5,
-        previouslyFocusedElement,
-        restorePageScrolling
-      );
     });
 
     document.body.append(overlay);
     intentInput.focus();
   }
 
+  function createPrompt(triggerMetric, eyebrowText, titleText, explanation) {
+    intentPromptIsVisible = true;
+    recoveryTriggerMetric = triggerMetric;
+    const previouslyFocusedElement = document.activeElement;
+    const restorePageScrolling = lockPageScrollingForPrompt();
+    const overlay = createBlockingPromptOverlay();
+    const panel = document.createElement("div");
+    panel.className = "behavyour-prompt-panel";
+    overlay.append(panel);
+
+    addPromptText(panel, "div", eyebrowText, "behavyour-prompt-eyebrow")
+      .setAttribute("aria-hidden", "true");
+    addPromptText(panel, "h2", titleText).id = "behavyour-prompt-title";
+    addPromptText(panel, "p", explanation, "behavyour-trigger-explanation");
+
+    return { overlay, panel, previouslyFocusedElement, restorePageScrolling };
+  }
+
+  async function savePromptAndReset(prompt, guidance, button, seconds, message) {
+    try {
+      const response = await chrome.runtime.sendMessage(message);
+      if (!response?.ok) {
+        throw new Error(response?.error || "Your answer could not be saved. Try again.");
+      }
+      beginHandsOffReset(prompt, Number(seconds) || 5);
+    } catch (error) {
+      guidance.textContent = `${error.message} Your answer is still here; try again.`;
+      button.disabled = false;
+    }
+  }
+
   function beginHandsOffReset(
-    overlay,
-    panel,
-    seconds,
-    previouslyFocusedElement,
-    restorePageScrolling
+    { overlay, panel, previouslyFocusedElement, restorePageScrolling },
+    seconds
   ) {
     panel.replaceChildren();
     overlay.focus();
@@ -1679,10 +1455,11 @@
     addPromptText(
       panel,
       "div",
-      "COMPETING ACTION",
+      "A SHORT RESET",
       "behavyour-prompt-eyebrow"
     );
-    addPromptText(panel, "h2", "Take your hand off the mouse");
+    addPromptText(panel, "h2", "Take your hand off the mouse")
+      .id = "behavyour-prompt-title";
     addPromptText(
       panel,
       "p",
@@ -1768,9 +1545,7 @@
     }
   }
 
-  // -------------------------------------------------------------------------
   // Page event listeners
-  // -------------------------------------------------------------------------
 
   window.addEventListener(
     "pointermove",
@@ -1818,10 +1593,7 @@
       previousPoint = currentPoint;
       moveCount += 1;
 
-      /*
-       * Debouncing: every move restarts the timer. Evaluation occurs only
-       * after the pointer has settled for 1.2 seconds.
-       */
+      // Evaluate after the pointer settles.
       clearTimeout(movementTimer);
       movementTimer = setTimeout(
         evaluateMovementBurst,
@@ -1834,7 +1606,7 @@
   window.addEventListener(
     "click",
     (event) => {
-      if (intentPromptIsVisible || !extensionEnabled || !event.isTrusted) {
+      if (intentPromptIsVisible || !settings.enabled || !event.isTrusted) {
         return;
       }
 
@@ -1875,29 +1647,12 @@
     true
   );
 
-  /*
-   * Scroll events can also be caused by a site's own code. Requiring a nearby
-   * wheel, touch, or navigation-key input keeps auto-advancing pages from
-   * looking like user scrolling. `capture: true` also sees nested feed panels.
-   */
-  window.addEventListener(
-    "wheel",
-    (event) => {
-      if (event.isTrusted) {
-        lastUserScrollInputAt = Date.now();
-      }
-    },
-    { capture: true, passive: true }
-  );
-  window.addEventListener(
-    "touchmove",
-    (event) => {
-      if (event.isTrusted) {
-        lastUserScrollInputAt = Date.now();
-      }
-    },
-    { capture: true, passive: true }
-  );
+  // Require trusted user input before counting scrolls; capture sees nested feeds.
+  for (const eventType of ["wheel", "touchmove"]) {
+    window.addEventListener(eventType, (event) => {
+      if (event.isTrusted) lastUserScrollInputAt = Date.now();
+    }, { capture: true, passive: true });
+  }
   window.addEventListener(
     "keydown",
     (event) => {
@@ -1920,16 +1675,9 @@
     { capture: true, passive: true }
   );
 
-  const usefulEventTypes = [
-    "keydown",
-    "input",
-    "focusin",
-    "dragstart"
-  ];
-
-  usefulEventTypes.forEach((eventType) => {
+  for (const eventType of ["keydown", "input", "focusin", "dragstart"]) {
     window.addEventListener(eventType, recordUsefulAction, { passive: true });
-  });
+  }
 
   startInfiniteFeedObserver();
   loadSettings();

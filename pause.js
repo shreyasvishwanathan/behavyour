@@ -1,320 +1,183 @@
-/*
- * PAUSED-TAB CHECKPOINT CONTROLLER
- * --------------------------------
- * This page never receives the attempted destination in its address bar. It
- * receives only a random queue id, asks background.js for the matching local
- * record, and sends named decisions back to background.js.
- */
-
 const STILLNESS_SECONDS = 5;
 const SIGNIFICANT_POINTER_MOVEMENT = 4;
 const MINIMUM_TAB_INTENT_CHARACTERS = 12;
+const getElement = (id) => document.getElementById(id);
+const queueId = new URLSearchParams(window.location.search).get("id") || "";
 
-let queueId = "";
-let pauseContext = null;
+let pauseContext;
 let stillnessEndsAt = 0;
 let stillnessTimer;
 let lockTimer;
 let reflectionTimer;
-let stillnessAnchorPoint = null;
-
-function getElement(id) {
-  return document.getElementById(id);
-}
+let stillnessAnchorPoint;
 
 function formatDuration(milliseconds) {
-  const totalSeconds = Math.ceil(Math.max(0, milliseconds) / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  const seconds = Math.ceil(Math.max(0, milliseconds) / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function showError(message) {
-  getElement("errorMessage").textContent = message || "";
-}
-
-function getQueueIdFromAddress() {
-  /*
-   * URLSearchParams is the browser's safe way to read `?id=...`. The id has no
-   * browsing information in it; background.js owns the real destination.
-   */
-  const parameters = new URLSearchParams(window.location.search);
-  return parameters.get("id") || "";
+function showError(message = "") {
+  getElement("errorMessage").textContent = message;
 }
 
 function describeDestination(item) {
-  if (!item.destinationHost) {
-    return "This was a blank new-tab attempt. No destination has been entered.";
-  }
-
-  const categoryText = item.category ? ` (${item.category})` : "";
-  return (
-    `You asked for ${item.destinationHost}${categoryText} while staying with ` +
-    `“${item.sourceTitle}”. The destination has not been opened yet.`
-  );
+  if (!item.destinationHost) return "You tried to open a blank new tab.";
+  const category = item.category ? ` (${item.category})` : "";
+  return `You asked for ${item.destinationHost}${category} while working on “${item.sourceTitle}”. This destination has not opened yet.`;
 }
-
-// ---------------------------------------------------------------------------
-// First action: physically stop the pointer loop
-// ---------------------------------------------------------------------------
 
 function restartStillnessTimer() {
   stillnessEndsAt = Date.now() + STILLNESS_SECONDS * 1000;
 }
 
-function finishStillnessStep() {
+function handlePointerMove(event) {
+  const point = { x: event.clientX, y: event.clientY };
+  if (!stillnessAnchorPoint || Math.hypot(
+    point.x - stillnessAnchorPoint.x, point.y - stillnessAnchorPoint.y
+  ) >= SIGNIFICANT_POINTER_MOVEMENT) {
+    stillnessAnchorPoint = point;
+    restartStillnessTimer();
+  }
+}
+
+function updateStillnessCountdown() {
+  const remaining = Math.max(0, stillnessEndsAt - Date.now());
+  getElement("stillnessCountdown").textContent = String(Math.ceil(remaining / 1000));
+  if (remaining > 0) return;
   clearInterval(stillnessTimer);
+  window.removeEventListener("pointermove", handlePointerMove);
   getElement("resetStep").classList.add("hidden");
   getElement("decisionStep").classList.remove("hidden");
   getElement("returnButton").focus();
   startLockCountdown();
 }
 
-function updateStillnessCountdown() {
-  const millisecondsLeft = Math.max(0, stillnessEndsAt - Date.now());
-  getElement("stillnessCountdown").textContent = String(
-    Math.ceil(millisecondsLeft / 1000)
-  );
-
-  if (millisecondsLeft === 0) {
-    finishStillnessStep();
-  }
-}
-
 function startStillnessStep() {
   restartStillnessTimer();
-  updateStillnessCountdown();
   stillnessTimer = setInterval(updateStillnessCountdown, 100);
-
-  window.addEventListener(
-    "pointermove",
-    (event) => {
-      const currentPoint = { x: event.clientX, y: event.clientY };
-
-      if (stillnessAnchorPoint) {
-        const movement = Math.hypot(
-          currentPoint.x - stillnessAnchorPoint.x,
-          currentPoint.y - stillnessAnchorPoint.y
-        );
-
-        if (
-          movement >= SIGNIFICANT_POINTER_MOVEMENT &&
-          !getElement("resetStep").classList.contains("hidden")
-        ) {
-          restartStillnessTimer();
-          stillnessAnchorPoint = currentPoint;
-        }
-      } else {
-        /* The first observed move also restarts the hands-off interval. */
-        stillnessAnchorPoint = currentPoint;
-        restartStillnessTimer();
-      }
-    },
-    { passive: true }
-  );
+  updateStillnessCountdown();
+  window.addEventListener("pointermove", handlePointerMove, { passive: true });
 }
-
-// ---------------------------------------------------------------------------
-// Second action: choose return/later, or state a concrete purpose
-// ---------------------------------------------------------------------------
 
 function startLockCountdown() {
   clearInterval(lockTimer);
-
-  function updateLockCountdown() {
-    const millisecondsLeft = Math.max(
-      0,
-      pauseContext.lockUntil - Date.now()
-    );
-
-    getElement("lockCountdown").textContent = formatDuration(millisecondsLeft);
-
-    if (millisecondsLeft === 0) {
+  function update() {
+    const remaining = Math.max(0, pauseContext.lockUntil - Date.now());
+    getElement("lockCountdown").textContent = formatDuration(remaining);
+    if (remaining === 0) {
       clearInterval(lockTimer);
       getElement("lockStatus").classList.add("hidden");
       getElement("intentSection").classList.remove("hidden");
     }
   }
-
-  updateLockCountdown();
-  lockTimer = setInterval(updateLockCountdown, 250);
+  lockTimer = setInterval(update, 250);
+  update();
 }
 
-async function sendResolution(messageType) {
-  showError("");
+function updateIntentButton() {
+  getElement("commitIntentButton").disabled =
+    getElement("tabIntent").value.trim().length < MINIMUM_TAB_INTENT_CHARACTERS;
+}
 
+async function sendDecision(type, data = {}) {
+  showError();
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: messageType,
-      queueId
-    });
-
-    if (!response.ok) {
-      showError(response.error);
+    const response = await chrome.runtime.sendMessage({ type, queueId, ...data });
+    if (!response?.ok) {
+      showError(response?.error || "Could not save this choice. Please try again.");
+      if (response?.waiting) {
+        // A newer tab pause requires a fresh commitment after its timer ends.
+        pauseContext.lockUntil = response.lockUntil;
+        clearInterval(reflectionTimer);
+        getElement("reflectionStep").classList.add("hidden");
+        getElement("openButton").disabled = true;
+        getElement("tabIntent").disabled = false;
+        updateIntentButton();
+        getElement("intentSection").classList.add("hidden");
+        getElement("lockStatus").classList.remove("hidden");
+        startLockCountdown();
+      }
     }
+    return response;
   } catch {
-    showError("Behavyour could not save that choice. Please try again.");
+    showError("Could not save this choice. Please try again.");
+    return null;
   }
 }
 
-function beginReflectionCountdown(decisionReadyAt) {
+async function sendResolution(type) {
+  getElement("returnButton").disabled = true;
+  getElement("saveButton").disabled = true;
+  const response = await sendDecision(type);
+  if (!response?.ok) {
+    getElement("returnButton").disabled = false;
+    getElement("saveButton").disabled = false;
+  }
+}
+
+function beginReflectionCountdown(readyAt) {
   getElement("reflectionStep").classList.remove("hidden");
   getElement("commitIntentButton").disabled = true;
   getElement("tabIntent").disabled = true;
-
+  getElement("openButton").disabled = true;
   clearInterval(reflectionTimer);
-
-  function updateReflectionCountdown() {
-    const millisecondsLeft = Math.max(0, decisionReadyAt - Date.now());
-
-    if (millisecondsLeft > 0) {
+  function update() {
+    const remaining = Math.max(0, readyAt - Date.now());
+    if (remaining > 0) {
       getElement("reflectionMessage").textContent =
-        `Hold that purpose for ${formatDuration(millisecondsLeft)}. ` +
-        "This is deliberate friction, not a loading delay.";
+        `Take ${formatDuration(remaining)} to consider whether this tab helps your task.`;
       return;
     }
-
     clearInterval(reflectionTimer);
-    getElement("reflectionMessage").textContent =
-      "Purpose stated. Press Enter or use the button to open only this tab.";
+    getElement("reflectionMessage").textContent = "Ready when you are. Open this one tab, or return to your task.";
     getElement("openButton").disabled = false;
     getElement("openButton").focus();
   }
-
-  updateReflectionCountdown();
-  reflectionTimer = setInterval(updateReflectionCountdown, 100);
-}
-
-function resetIntentControlsAfterNewLock() {
-  /*
-   * A different tab can begin a fresh cooldown while this page is waiting.
-   * Re-enable the form so the user deliberately commits again after that new
-   * cooldown, instead of reusing an old, half-finished override.
-   */
-  clearInterval(reflectionTimer);
-  getElement("reflectionStep").classList.add("hidden");
-  getElement("openButton").disabled = true;
-  getElement("tabIntent").disabled = false;
-
-  const intentIsLongEnough =
-    getElement("tabIntent").value.trim().length >=
-    MINIMUM_TAB_INTENT_CHARACTERS;
-  getElement("commitIntentButton").disabled = !intentIsLongEnough;
+  reflectionTimer = setInterval(update, 100);
+  update();
 }
 
 async function commitIntent() {
   const intent = getElement("tabIntent").value.trim();
-
   if (intent.length < MINIMUM_TAB_INTENT_CHARACTERS) {
-    showError(
-      `Please write at least ${MINIMUM_TAB_INTENT_CHARACTERS} characters.`
-    );
+    showError(`Please write at least ${MINIMUM_TAB_INTENT_CHARACTERS} characters.`);
     return;
   }
-
-  showError("");
-  const response = await chrome.runtime.sendMessage({
-    type: "beginIntentionalOpen",
-    queueId,
-    intent
-  });
-
-  if (!response.ok) {
-    showError(response.error);
-
-    if (response.waiting) {
-      pauseContext.lockUntil = response.lockUntil;
-      resetIntentControlsAfterNewLock();
-      getElement("intentSection").classList.add("hidden");
-      getElement("lockStatus").classList.remove("hidden");
-      startLockCountdown();
-    }
-
-    return;
-  }
-
-  beginReflectionCountdown(response.decisionReadyAt);
+  getElement("commitIntentButton").disabled = true;
+  const response = await sendDecision("beginIntentionalOpen", { intent });
+  if (response?.ok) beginReflectionCountdown(response.decisionReadyAt);
+  else updateIntentButton();
 }
 
 async function openIntentionally() {
   getElement("openButton").disabled = true;
-  showError("");
-
-  const response = await chrome.runtime.sendMessage({
-    type: "completeIntentionalOpen",
-    queueId
-  });
-
-  if (!response.ok) {
-    showError(response.error);
-    getElement("openButton").disabled = false;
-
-    if (response.waiting) {
-      pauseContext.lockUntil = response.lockUntil;
-      resetIntentControlsAfterNewLock();
-      getElement("intentSection").classList.add("hidden");
-      getElement("lockStatus").classList.remove("hidden");
-      startLockCountdown();
-    }
-  }
+  const response = await sendDecision("completeIntentionalOpen");
+  if (!response?.ok && !response?.waiting) getElement("openButton").disabled = false;
 }
-
-// ---------------------------------------------------------------------------
-// Page startup and button connections
-// ---------------------------------------------------------------------------
 
 async function initializePausePage() {
-  queueId = getQueueIdFromAddress();
-
-  if (!queueId) {
+  try {
+    if (!queueId) throw new Error("This saved tab could not be found. You can close this page.");
+    pauseContext = await chrome.runtime.sendMessage({ type: "getPauseContext", queueId });
+    if (!pauseContext?.ok) throw new Error(pauseContext?.error || "This saved tab is no longer available.");
+    getElement("destinationSummary").textContent = describeDestination(pauseContext.item);
+    getElement("returnButton").textContent = `Return to ${pauseContext.item.sourceTitle}`;
+    getElement("saveButton").classList.toggle("hidden", !pauseContext.item.destinationUrl);
+    startStillnessStep();
+  } catch (error) {
     getElement("resetStep").classList.add("hidden");
     getElement("decisionStep").classList.remove("hidden");
-    showError("This pause page is missing its queue id.");
-    return;
+    getElement("decisionHeading").textContent = "This tab could not be loaded";
+    getElement("lockStatus").classList.add("hidden");
+    getElement("returnButton").disabled = true;
+    getElement("saveButton").disabled = true;
+    showError(error.message || "Could not load this saved tab. Reload this page to try again.");
   }
-
-  pauseContext = await chrome.runtime.sendMessage({
-    type: "getPauseContext",
-    queueId
-  });
-
-  if (!pauseContext.ok) {
-    getElement("resetStep").classList.add("hidden");
-    getElement("decisionStep").classList.remove("hidden");
-    showError(pauseContext.error);
-    return;
-  }
-
-  getElement("destinationSummary").textContent = describeDestination(
-    pauseContext.item
-  );
-  getElement("returnButton").textContent =
-    `Return to ${pauseContext.item.sourceTitle}`;
-
-  if (!pauseContext.item.destinationUrl) {
-    getElement("saveButton").classList.add("hidden");
-  }
-
-  startStillnessStep();
 }
 
-getElement("returnButton").addEventListener("click", () => {
-  sendResolution("returnToTask");
-});
-
-getElement("saveButton").addEventListener("click", () => {
-  sendResolution("saveForLater");
-});
-
-getElement("tabIntent").addEventListener("input", () => {
-  const intentIsLongEnough =
-    getElement("tabIntent").value.trim().length >=
-    MINIMUM_TAB_INTENT_CHARACTERS;
-
-  getElement("commitIntentButton").disabled = !intentIsLongEnough;
-});
-
+getElement("returnButton").addEventListener("click", () => sendResolution("returnToTask"));
+getElement("saveButton").addEventListener("click", () => sendResolution("saveForLater"));
+getElement("tabIntent").addEventListener("input", updateIntentButton);
 getElement("commitIntentButton").addEventListener("click", commitIntent);
 getElement("openButton").addEventListener("click", openIntentionally);
-
 initializePausePage();
